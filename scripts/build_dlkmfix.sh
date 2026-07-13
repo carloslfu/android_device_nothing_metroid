@@ -11,10 +11,11 @@ MK="${METROID_KERNEL_PREBUILTS:-$TOP/device/nothing/metroid-kernel}"
 AVB=$TOOLS/avbtool
 VDLKM=$MK/vendor_dlkm.img      # populated 57.8MB (339 .ko)
 SDLKM=$MK/system_dlkm.img      # populated 7.6MB
+STOCK_VBMETA_VENDOR=${METROID_STOCK_VBMETA_VENDOR:-$MK/vbmeta_vendor.stock.img}
 KEY=$TOP/external/avb/test/data/testkey_rsa2048.pem
 cd "$TOP"
 echo "=== [1/3] sanity: inputs exist ==="
-for f in "$AVB" "$TOOLS/build_super_image" "$KEY" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$VDLKM" "$SDLKM"; do
+for f in "$AVB" "$TOOLS/build_super_image" "$KEY" "$STOCK_VBMETA_VENDOR" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$VDLKM" "$SDLKM"; do
   [ -f "$f" ] || { echo "!! MISSING: $f"; exit 1; }
   printf "  ok  %-10s  %s\n" "$(numfmt --to=iec "$(stat -c%s "$f")")" "$f"
 done
@@ -22,8 +23,14 @@ printf '  vendor_dlkm sha256: '
 sha256sum "$VDLKM" | cut -d' ' -f1
 printf '  system_dlkm sha256: '
 sha256sum "$SDLKM" | cut -d' ' -f1
+ROLLBACK_INDEX=$("$AVB" info_image --image "$STOCK_VBMETA_VENDOR" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
+if [ -z "$ROLLBACK_INDEX" ]; then
+  echo "!! Could not read the stock vbmeta_vendor rollback index." >&2
+  exit 1
+fi
+echo "  vbmeta_vendor rollback index: $ROLLBACK_INDEX"
 echo "=== [2/3] coherent vbmeta_vendor (LOS vendor + populated dlkm + odm) ==="
-"$AVB" make_vbmeta_image --algorithm SHA256_RSA2048 --key "$KEY" --padding_size 4096 --rollback_index 1769904000 \
+"$AVB" make_vbmeta_image --algorithm SHA256_RSA2048 --key "$KEY" --padding_size 4096 --rollback_index "$ROLLBACK_INDEX" \
   --include_descriptors_from_image "$OUT/vendor.img" \
   --include_descriptors_from_image "$VDLKM" \
   --include_descriptors_from_image "$SDLKM" \
