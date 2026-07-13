@@ -56,18 +56,18 @@ known-good state. Git tag: **`known-good-boot-20260708`** (this repo).
 
 ## RESTORE (if boot breaks)
 ```
-cd device/nothing/metroid && git checkout known-good-boot-20260708
-# vendor tree: ensure init.qcom.usb.rc (adb-only), init.target.rc (nt_kmsg),
-#   gadget HAL disabled are intact (see patches/vendor_nothing_metroid/)
-cd ~/dev/metroid && ./build_los23.sh systemimage && ./build_los23.sh vendorimage
-bash build_dlkmfix.sh && bash flash_props.sh    # then adb reboot bootloader to trigger the flash
+cd "$ANDROID_BUILD_TOP"
+# Re-sync the device/framework/vendor commits pinned by phone.md's
+# build/manifest/phone_md_lineage.xml, then rebuild the full target.
+device/nothing/metroid/scripts/build_los23.sh
+device/nothing/metroid/scripts/build_dlkmfix.sh
 ```
 
 ## BUILD / FLASH
-- Product-config changes need `./build_los23.sh {systemimage|vendorimage}` (kati regen), NOT bare ninja.
+- Product-config changes need `scripts/build_los23.sh {systemimage|vendorimage}` (Kati regen), not bare Ninja.
 - Framework `.java/.cpp` → `systemimage`. init rc / VINTF / PRODUCT_PACKAGES → `vendorimage`.
-- Repack super + coherent vbmeta_vendor: `bash build_dlkmfix.sh`.
-- Flash: `bash flash_props.sh` (flashes super+vbmeta+vbmeta_vendor+init_boot; watches boot_completed).
+- Repack super + coherent vbmeta_vendor: `scripts/build_dlkmfix.sh`.
+- Flash from the attached Mac with the guarded `phone.md/scripts/flash-metroid-full-rom.sh`. The old hardcoded server-side flash/capture scripts have been removed.
 - Bounce Android/recovery → fastboot with `adb reboot bootloader` (no button-holds).
 - LANDMINES: slot **a** only; `fastboot set_active a` + `fastboot erase misc` before every flash;
   NEVER `--flags 3` on the ROOT vbmeta; vendor must be ext4; vendor_boot page_size 0x1000;
@@ -82,7 +82,11 @@ crash loop). Classify: Watchdog kill vs native SIGABRT vs Java FATAL are 3 diffe
 Module-set (339 .ko into empty vendor_dlkm) → sepolicy wired → early-adb →
 hw_timeout_multiplier=4 → audio core HAL packaged → 2 framework patches.
 
-## POST-BOOT TODO (work on these WITHOUT breaking boot; verify each with a reflash)
+## POST-BOOT CHECKS (verify on the pinned phone.md build)
+
+The upstream notes and README disagree about several services. Treat the
+following as unproved until the pinned phone.md image supplies its own logs:
+
 - **Audio**: no ALSA sound card (`/proc/asound/cards` empty). ADSP audio-DSP path down:
   `vendor.adsprpcd` crash-loops exit 114 / `fastrpc_wait_for_secure_device: Poll timeout`.
   Fix ADSP/fastRPC → sound card registers → PAL/AGM/ACDB → real audio.
@@ -96,8 +100,7 @@ hw_timeout_multiplier=4 → audio core HAL packaged → 2 framework patches.
 - **NFC / SE / fingerprint**: HALs down; not boot-blocking.
 
 ## GIT / PUSH
-- Device tree remote: `logix727/android_device_nothing_metroid` (public). Push HEAD + the tag.
+- Device tree remote: `carloslfu/android_device_nothing_metroid`, branch `phone-md-23.0`. The imported upstream commit stays recorded in the phone.md manifest.
 - Vendor tree (`android_vendor_nothing_metroid`) holds **proprietary blobs** — do NOT push to a
   public repo (DMCA). The important vendor *config* (early-adb, nt_kmsg, gadget-disabled) is
   captured as patches in `patches/vendor_nothing_metroid/`.
-- A push SSH key exists on the build server: `~/.ssh/id_ed25519_gh` (add its .pub to GitHub).

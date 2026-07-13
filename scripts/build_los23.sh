@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-cd /home/logix/dev/metroid/lineage
-source build/envsetup.sh >/dev/null 2>&1
-export TARGET_PRODUCT=lineage_metroid
-export TARGET_RELEASE=bp2a
-export TARGET_BUILD_VARIANT=userdebug
-export LINEAGE_BUILD=metroid
-export WITH_ADB_INSECURE=true
-export USE_CCACHE=1
-export CCACHE_EXEC=/usr/bin/ccache
-export CCACHE_DIR=/home/logix/.ccache
-exec build/soong/soong_ui.bash --make-mode -j$(nproc) "$@"
+# Path-independent metroid build entry point. Do not run this while another
+# Soong/Kati/Ninja process is using the same OUT_DIR.
+set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOP="${ANDROID_BUILD_TOP:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
+LUNCH_TARGET="${METROID_LUNCH_TARGET:-lineage_metroid-bp2a-userdebug}"
+JOBS="${METROID_JOBS:-$(nproc)}"
+
+cd "$TOP"
+# shellcheck source=/dev/null
+source build/envsetup.sh >/dev/null
+lunch "$LUNCH_TARGET" >/dev/null
+exec m -j"$JOBS" "$@"
