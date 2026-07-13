@@ -1,5 +1,12 @@
 DEVICE_PATH := device/nothing/metroid
 
+# Android 16 generates vendor/etc/linker.config.pb from this build's vendor
+# graph. Remove Nothing's extracted stock copy after product inheritance has
+# been resolved but before board_config.mk expands the destination placeholder.
+PRODUCT_COPY_FILES := $(filter-out \
+    vendor/nothing/metroid/proprietary/vendor/etc/linker.config.pb:%, \
+    $(PRODUCT_COPY_FILES))
+
 # Bring-up: dexpreopt off (restores 07-05 23:40 known-good EROFS bring-up config)
 WITH_DEXPREOPT := false
 
