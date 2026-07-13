@@ -1,0 +1,20 @@
+// phone.md HOME for the full metroid product.
+//
+// The release APK is built from the phone.md repo and supplied privately at
+// this path. Keep the proved import shape until the native capture/input
+// component is built and signed with this ROM's platform key.
+
+android_app_import {
+    name: "PhoneMdLauncher",
+    apk: "PhoneMdLauncher.apk",
+    presigned: true,
+    preprocessed: true,
+    privileged: false,
+    dex_preopt: {
+        enabled: false,
+    },
+    overrides: [
+        "Launcher3",
+        "Launcher3QuickStep",
+    ],
+}
