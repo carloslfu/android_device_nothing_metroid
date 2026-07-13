@@ -2,7 +2,7 @@
 
 $(call inherit-product, device/nothing/metroid/lineage_metroid.mk)
 
-PRODUCT_NAME := phone_md_metroid
+PRODUCT_NAME := lineage_phone_md_metroid
 PRODUCT_DEVICE := metroid
 PRODUCT_MANUFACTURER := Nothing
 PRODUCT_BRAND := Nothing

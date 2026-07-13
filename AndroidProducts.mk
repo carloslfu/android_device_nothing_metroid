@@ -6,4 +6,4 @@ COMMON_LUNCH_CHOICES := \
     lineage_metroid-bp2a-user \
     lineage_metroid-bp2a-userdebug \
     lineage_metroid-bp2a-eng \
-    phone_md_metroid-bp2a-userdebug
+    lineage_phone_md_metroid-bp2a-userdebug
