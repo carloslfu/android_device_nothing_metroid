@@ -139,7 +139,7 @@ $(call inherit-product-if-exists, vendor/nothing/metroid/metroid-vendor.mk)
 # fragments. The extracted stock copy makes the generated target depend on
 # itself and also describes a different userspace.
 PRODUCT_COPY_FILES := $(filter-out \
-    vendor/nothing/metroid/proprietary/vendor/etc/linker.config.pb:$(TARGET_COPY_OUT_VENDOR)/etc/linker.config.pb, \
+    %:vendor/etc/linker.config.pb, \
     $(PRODUCT_COPY_FILES))
 
 # Bring-up build21: no_fatal blanket for observability (keep device up past ~29s for adb)
