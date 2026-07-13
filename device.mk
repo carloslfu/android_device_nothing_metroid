@@ -96,8 +96,8 @@ PRODUCT_PACKAGES +=     vendor.qti.hardware.vibrator.service
 # Vendor servicemanager (frameworks/native) - vndservice_contexts users need it
 PRODUCT_PACKAGES +=     vndservicemanager
 
-# WiFi supplicant (external/wpa_supplicant_8). The wifi HAL service is the STOCK blob
-# (proprietary_force_copy.mk): the AOSP generic android.hardware.wifi-service has no vendor
+# WiFi supplicant (external/wpa_supplicant_8). The wifi HAL service is the stock
+# `android.hardware.wifi-service.metroid` prebuilt: the AOSP generic service has no vendor
 # impl here ("failed to open /vendor/etc/wifi/vendor_hals") -> IWifi start fails code 9.
 # Stock service + libwifi-hal{,-qcom,-ctrl} + wcn7750 WCNSS_qcom_cfg.ini (icnss2 probe needs
 # it or wlan0 never appears). Verified live on device 2026-07-09 (enable + multi-band scan).
@@ -106,7 +106,8 @@ PRODUCT_PACKAGES +=     vndservicemanager
 # crash-loop (BiometricService "Gatekeeper service not available"). Found 2026-07-09.
 PRODUCT_PACKAGES +=     libxml2.vendor
 PRODUCT_PACKAGES +=     wpa_supplicant     wpa_cli \
-                        android.hardware.wifi.hostapd-V2-ndk
+                        android.hardware.wifi.hostapd-V2-ndk \
+                        android.hardware.wifi-service.metroid
 # Display HALs from source (b20): ~23s reset fix. Module names mirror onyx un_dt device.mk
 # (same SoC sun/sm8750); composer-service added (essential, buildable in sm8750/display tree).
 PRODUCT_PACKAGES +=     vendor.qti.hardware.display.composer-service     vendor.qti.hardware.display.allocator-service     vendor.qti.hardware.display.demura-service     vendor.qti.hardware.display.snapalloc-impl     android.hardware.graphics.mapper@4.0-impl-qti-display     android.hardware.graphics.composer3-V3-ndk.vendor     vendor.qti.hardware.display.composer3-V1-ndk.vendor     vendor.qti.hardware.display.config-V12-ndk.vendor     vendor.qti.hardware.display.aiqe-V2-ndk.vendor
@@ -170,7 +171,7 @@ PRODUCT_COPY_FILES += \
 # mapper.qti.xml dropped 2026-07-10: qcom-caf gralloc source (mapper.qti) now provides the
 # same fragment -> fsgen packaging conflict; the standalone-fragment fix was proven ineffective
 # anyway (see metroid-mapper-vintf-fix-attempt-20260706).
-PRODUCT_PACKAGES += wifi-service.metroid.xml audio_qti_services.metroid.xml audio_effects.metroid.xml hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.metroid.xml camera_provider.metroid.xml
+PRODUCT_PACKAGES += audio_qti_services.metroid.xml audio_effects.metroid.xml hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.metroid.xml camera_provider.metroid.xml
 # batch 4 (2026-07-10, live-verified): radio HALs + clearkey + qspa VINTF declarations
 PRODUCT_PACKAGES += android.hardware.radio.config.metroid4.xml android.hardware.radio.data.metroid4.xml android.hardware.radio.messaging.metroid4.xml android.hardware.radio.modem.metroid4.xml android.hardware.radio.network.metroid4.xml android.hardware.radio.sim.metroid4.xml android.hardware.radio.voice.metroid4.xml android.hardware.drm-service.clearkey.metroid4.xml vendor.qti.qspa-service.metroid4.xml
 

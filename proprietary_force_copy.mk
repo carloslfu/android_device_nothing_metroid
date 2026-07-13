@@ -187,8 +187,6 @@ PRODUCT_COPY_FILES += \
 #    cameraservice.common-V1-ndk -> noth camera ext, libtinycompress+closure -> audio HAL/PAL.
 # All verified live on device via /vendor/lib64 overlay before staging.
 PRODUCT_COPY_FILES += \
-    vendor/nothing/metroid/proprietary/vendor/bin/hw/android.hardware.wifi-service:$(TARGET_COPY_OUT_VENDOR)/bin/hw/android.hardware.wifi-service \
-    vendor/nothing/metroid/proprietary/vendor/etc/init/android.hardware.wifi-service.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/android.hardware.wifi-service.rc \
     vendor/nothing/metroid/proprietary/vendor/etc/wifi/wcn7750/WCNSS_qcom_cfg.ini:$(TARGET_COPY_OUT_VENDOR)/etc/wifi/wcn7750/WCNSS_qcom_cfg.ini \
     vendor/nothing/metroid/proprietary/vendor/firmware/wlan/qca_cld/wcn7750/WCNSS_qcom_cfg.ini:$(TARGET_COPY_OUT_VENDOR)/firmware/wlan/qca_cld/wcn7750/WCNSS_qcom_cfg.ini \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.wifi.common-V1-ndk.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.wifi.common-V1-ndk.so \

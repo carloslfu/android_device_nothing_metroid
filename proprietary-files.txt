@@ -17,10 +17,6 @@ odm/overlayfs_origin/vendor/etc/init/android.hardware.security.keymint-service.s
 odm/overlayfs_origin/vendor/etc/init/android.hardware.weaver-service.thales.rc
 system_ext/apex/com.android.compos.apex
 system_ext/apex/com.android.vndk.v34.apex
-system_ext/etc/aconfig/flag.info
-system_ext/etc/aconfig/flag.map
-system_ext/etc/aconfig/flag.val
-system_ext/etc/aconfig/package.map
 system_ext/etc/default-permissions/default-permissions-com.quicinc.voice.activation.xml
 system_ext/etc/dpm/dpm.conf
 system_ext/etc/hdr_config/ans_off/ans_config.txt
@@ -832,6 +828,7 @@ vendor/bin/hw/android.hardware.security.keymint-service-spu-qti
 vendor/bin/hw/android.hardware.security.keymint-service.strongbox-thales
 vendor/bin/hw/android.hardware.weaver-service-spu-qti
 vendor/bin/hw/android.hardware.weaver-service.thales
+vendor/bin/hw/android.hardware.wifi-service;EXTRACT_ONLY
 vendor/bin/hw/hostapd
 vendor/bin/hw/qconfigservice
 vendor/bin/hw/qcrilNrd
@@ -1040,7 +1037,6 @@ vendor/etc/HapticsPolicy.xml
 vendor/etc/Hapticsconfig.xml
 vendor/etc/IPACM_Filter_cfg.xml
 vendor/etc/IPACM_cfg.xml
-vendor/etc/NOTICE.xml.gz
 vendor/etc/a2dp_audio_policy_configuration.xml
 vendor/etc/acdbdata/ffv_models/ffv__5.0.2_0.1__eai_4.8_enpu_v5.pmd
 vendor/etc/acdbdata/ffv_models/ffv__7.1.1_0.1__eai_4.8_enpu_v5.pmd
@@ -1103,7 +1099,6 @@ vendor/etc/acdbdata/nn_vad_models/fai__3.0.0_0.0__eai_4.2_enpuv5.pmd
 vendor/etc/acdbdata/nn_vad_models/fai__3.0.0_0.0__eai_4.6_enpuv5.pmd
 vendor/etc/acdbdata/tuna_qrd/QRD_tuna_acdb_cal.acdb
 vendor/etc/acdbdata/tuna_qrd/QRD_tuna_workspaceFileXml.qwsp
-vendor/etc/aconfig_flags.pb
 vendor/etc/advance_thermal_mitigation/atmc.json
 vendor/etc/advance_thermal_mitigation/atmc_ind.json
 vendor/etc/advance_thermal_mitigation/atmc_ind_win.json
@@ -1389,7 +1384,7 @@ vendor/etc/init/android.hardware.thermal-service.qti.rc
 vendor/etc/init/android.hardware.usb-service.qti.rc
 vendor/etc/init/android.hardware.usb.gadget-service.qti.rc
 vendor/etc/init/android.hardware.weaver-service-spu-qti.rc
-vendor/etc/init/android.hardware.wifi-service.rc
+vendor/etc/init/android.hardware.wifi-service.rc;EXTRACT_ONLY
 vendor/etc/init/android.hardware.wifi.supplicant-service.rc
 vendor/etc/init/audiohalservice_qti.rc
 vendor/etc/init/boringssl_self_test.rc
@@ -2073,6 +2068,7 @@ vendor/etc/whisper/data/TWVariantsRev.ocd2
 vendor/etc/whisper/data/TWVariantsRevPhrases.ocd2
 vendor/etc/whisper/data/hk2s.json
 vendor/etc/whisper/data/hk2t.json
+vendor/etc/vintf/manifest/android.hardware.wifi-service.xml;EXTRACT_ONLY
 vendor/etc/whisper/data/jp2t.json
 vendor/etc/whisper/data/s2hk.json
 vendor/etc/whisper/data/s2t.json
@@ -3266,7 +3262,7 @@ vendor/lib64/libmmfp.so
 vendor/lib64/libmmosal_vendor.so
 vendor/lib64/libmmrtpdecoder_vendor.so
 vendor/lib64/libmmrtpencoder_vendor.so
-vendor/lib64/libmorpho_RapidEffect.so
+vendor/lib64/libmorpho_RapidEffect.so;DISABLE_CHECKELF
 vendor/lib64/libmorpho_video_stabilizer.so
 vendor/lib64/libmotiondetection.arcsoft.so
 vendor/lib64/libmpbase.so
@@ -4088,4 +4084,3 @@ vendor/product/media/audio/ui/camera_click.ogg
 vendor/product/media/audio/ui/camera_focus.ogg
 vendor/product/media/audio/ui/screenshot.ogg
 vendor/rfs/rfs_symlinks
-
