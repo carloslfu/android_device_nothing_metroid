@@ -16,5 +16,7 @@ android_app_import {
     overrides: [
         "Launcher3",
         "Launcher3QuickStep",
+        "LineageSetupWizard",
+        "Provision",
     ],
 }

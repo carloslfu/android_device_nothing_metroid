@@ -6,6 +6,6 @@ PRODUCT_NAME := phone_md_metroid
 
 # Onboarding belongs to the realtime phone.md agent. The first file is empty;
 # the agent builds it through edit_phone_md as the conversation progresses.
-PRODUCT_PACKAGES -= LineageSetupWizard
-
+# PhoneMdLauncher's module overrides remove LineageSetupWizard and Provision;
+# PRODUCT_PACKAGES subtraction cannot remove an inherited product package.
 PRODUCT_PACKAGES += PhoneMdLauncher
