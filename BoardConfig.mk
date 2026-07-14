@@ -62,6 +62,9 @@ TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
 # Board
 BOARD_USES_QCOM_HARDWARE := true
 BOARD_NO_RADIOIMAGE := true
+# Phone (3) shipped with an Android 15 vendor interface. Keep the GRF floor
+# separate from the Android 16 framework version built in this tree.
+BOARD_SHIPPING_API_LEVEL := 202404
 
 # Allow prebuilt ELF .so blobs shipped via PRODUCT_COPY_FILES
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true

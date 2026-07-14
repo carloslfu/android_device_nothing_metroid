@@ -43,6 +43,16 @@ CIT_POST_FS_DATA_BLOCK = '\n'.join([
     '',
 ])
 
+VENDOR_MEM_SLEEP_GENFSCON = (
+    '(genfscon sysfs "/power/mem_sleep" '
+    '(u object_r vendor_sysfs_suspend ((s0) (s0))))\n'
+)
+
+VENDOR_MEM_SLEEP_ALLOW = (
+    '(allow vendor_qti_init_shell vendor_sysfs_suspend '
+    '(file (write lock append map open)))'
+)
+
 blob_fixups: blob_fixups_user_type = {
     # The stock blob imports AHardwareBuffer functions without naming their
     # provider. Make the runtime dependency explicit instead of relying on the
@@ -58,6 +68,19 @@ blob_fixups: blob_fixups_user_type = {
         .regex_replace(
             re.escape(CIT_POST_FS_DATA_BLOCK),
             '# phone.md: factory identifier export to /data/config removed.\n',
+        ),
+    # Android 16 owns /sys/power/mem_sleep through sysfs_mem_sleep. The stock
+    # Android 15 vendor policy labels the same node with a private type, which
+    # makes second-stage init's split-policy compile fail. Keep the original
+    # qti_init_shell access on the Android 16 public type.
+    'vendor/etc/selinux/vendor_sepolicy.cil': blob_fixup()
+        .regex_replace(re.escape(VENDOR_MEM_SLEEP_GENFSCON), '')
+        .regex_replace(
+            re.escape(VENDOR_MEM_SLEEP_ALLOW),
+            VENDOR_MEM_SLEEP_ALLOW.replace(
+                'vendor_sysfs_suspend',
+                'sysfs_mem_sleep',
+            ),
         ),
 }  # fmt: skip
 
