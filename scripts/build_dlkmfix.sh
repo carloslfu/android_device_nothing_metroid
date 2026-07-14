@@ -25,6 +25,8 @@ VENDOR_BOOT_OUT=$OUT/vendor_boot.img
 STOCK_VBMETA_SYSTEM=${METROID_STOCK_VBMETA_SYSTEM:-$MK/vbmeta_system.stock.img}
 STOCK_VBMETA_VENDOR=${METROID_STOCK_VBMETA_VENDOR:-$MK/vbmeta_vendor.stock.img}
 KEY=$TOP/external/avb/test/data/testkey_rsa2048.pem
+BOOT_ROLLBACK_FLOOR=1775347200
+BOOT_SALT=a56ce8776a134b6ebf5bf0cfc67aabd56fabc41a961790dc16ee4770733770bc
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/metroid-dlkmfix.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 PUBKEY=$WORK/testkey_rsa2048.avbpubkey
@@ -62,6 +64,25 @@ require_sha256 "$INIT_BOOT" 940a06b1b6be16e27f0be891f6f872fe4b748e577cd1ea6ca7ee
 require_sha256 "$VENDOR_BOOT" 660cefc2a32d6220c5f9393d0fd2748087ba7651277d236c2417042d2d1ebad0
 require_sha256 "$STOCK_VBMETA_SYSTEM" 6a69203f0bfc9119bb95fc49b424ed8334783e9625b90d69b5c3f57397bfc1ef
 require_sha256 "$STOCK_VBMETA_VENDOR" 85b2a234a8742606a6c30cdd71b0b98e1562b2e3fc58c114bc69f1a898221d6b
+
+# The payload is the exact B4.1 boot image, so its AVB metadata must describe
+# that input rather than the Android 16 userspace being built around it. The
+# bootloader rejects the Lineage OS-version/fingerprint footer before kernel
+# entry even while unlocked.
+install -m 0644 "$BOOT" "$OUT/boot.img"
+"$AVB" erase_footer --image "$OUT/boot.img"
+"$AVB" add_hash_footer \
+  --image "$OUT/boot.img" \
+  --partition_size "$(stat -c%s "$BOOT")" \
+  --partition_name boot \
+  --algorithm SHA256_RSA2048 \
+  --key "$KEY" \
+  --rollback_index "$BOOT_ROLLBACK_FLOOR" \
+  --salt "$BOOT_SALT" \
+  --prop com.android.build.boot.os_version:15 \
+  --prop com.android.build.boot.fingerprint:Nothing/Metroid/Metroid:15/AQ3A.250728.001/2606241457:user/release-keys \
+  --prop com.android.build.boot.security_patch:2025-09-05
+
 BUILT_SYSTEM_ROLLBACK=$("$AVB" info_image --image "$OUT/vbmeta_system.img" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
 STOCK_SYSTEM_ROLLBACK=$("$AVB" info_image --image "$STOCK_VBMETA_SYSTEM" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
 VENDOR_ROLLBACK=$("$AVB" info_image --image "$STOCK_VBMETA_VENDOR" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
@@ -76,6 +97,18 @@ if [ "$BUILT_BOOT_ROLLBACK" -lt "$STOCK_BOOT_ROLLBACK" ]; then
   echo "!! boot rollback index is below the B4.1 input." >&2
   echo "   built $BUILT_BOOT_ROLLBACK" >&2
   echo "   stock $STOCK_BOOT_ROLLBACK" >&2
+  exit 1
+fi
+if [ "$BUILT_BOOT_ROLLBACK" != "$BOOT_ROLLBACK_FLOOR" ]; then
+  echo "!! boot rollback index does not match the pinned B4.1 floor." >&2
+  echo "   built $BUILT_BOOT_ROLLBACK" >&2
+  echo "   floor $BOOT_ROLLBACK_FLOOR" >&2
+  exit 1
+fi
+if ! diff -u \
+  <("$AVB" info_image --image "$BOOT" | grep '^[[:space:]]*Prop: com.android.build.boot') \
+  <("$AVB" info_image --image "$OUT/boot.img" | grep '^[[:space:]]*Prop: com.android.build.boot'); then
+  echo "!! rebuilt boot AVB properties differ from the exact B4.1 input." >&2
   exit 1
 fi
 SYSTEM_ROLLBACK=$STOCK_SYSTEM_ROLLBACK
