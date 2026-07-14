@@ -9,10 +9,12 @@ OUT="${OUT:-$TOP/out/target/product/metroid}"
 TOOLS="${ANDROID_HOST_OUT:-$TOP/out/host/linux-x86}/bin"
 MK="${METROID_KERNEL_PREBUILTS:-$TOP/device/nothing/metroid-kernel}"
 AVB=$TOOLS/avbtool
+AVB_PY=$TOP/external/avb/avbtool.py
 VDLKM=$MK/vendor_dlkm.img      # populated 57.8MB (339 .ko)
 SDLKM=$MK/system_dlkm.img      # populated 7.6MB
 PVMFW=$MK/pvmfw.img            # exact B4.1 protected-VM firmware
 BOOT=$MK/boot.img              # exact B4.1 GKI container; boot ramdisk is empty
+RECOVERY=$MK/recovery.stock.img # exact B4.1 recovery container
 DTBO=$MK/dtbo.img              # exact B4.1 device-tree overlays
 INIT_BOOT=$MK/init_boot.img    # exact B4.1 generic ramdisk
 VENDOR_BOOT=$MK/vendor_boot.img # exact B4.1 vendor ramdisk + first-stage fstab
@@ -22,11 +24,15 @@ PVMFW_OUT=$OUT/pvmfw.img
 DTBO_OUT=$OUT/dtbo.img
 INIT_BOOT_OUT=$OUT/init_boot.img
 VENDOR_BOOT_OUT=$OUT/vendor_boot.img
+RECOVERY_OUT=$OUT/recovery.img
+VENDOR_CIT_RC=$OUT/vendor/etc/init/init.nt_cit.rc
 STOCK_VBMETA_SYSTEM=${METROID_STOCK_VBMETA_SYSTEM:-$MK/vbmeta_system.stock.img}
 STOCK_VBMETA_VENDOR=${METROID_STOCK_VBMETA_VENDOR:-$MK/vbmeta_vendor.stock.img}
 KEY=$TOP/external/avb/test/data/testkey_rsa2048.pem
 BOOT_ROLLBACK_FLOOR=1775347200
 BOOT_SALT=a56ce8776a134b6ebf5bf0cfc67aabd56fabc41a961790dc16ee4770733770bc
+RECOVERY_SALT=410093f3bf6b9ed2b13694605a25618b3801c4050b83d4fea4f562a2d5376057
+RECOVERY_ROLLBACK=1
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/metroid-dlkmfix.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 PUBKEY=$WORK/testkey_rsa2048.avbpubkey
@@ -45,7 +51,7 @@ require_sha256() {
 
 cd "$TOP"
 echo "=== [1/5] sanity: inputs exist ==="
-for f in "$AVB" "$TOOLS/build_super_image" "$TOOLS/unpack_bootimg" "$KEY" "$STOCK_VBMETA_SYSTEM" "$STOCK_VBMETA_VENDOR" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$OUT/vbmeta.img" "$OUT/vbmeta_system.img" "$OUT/boot.img" "$OUT/recovery.img" "$BOOT" "$DTBO" "$INIT_BOOT" "$VENDOR_BOOT" "$VDLKM" "$SDLKM" "$PVMFW"; do
+for f in "$AVB" "$AVB_PY" "$TOOLS/build_super_image" "$TOOLS/unpack_bootimg" "$KEY" "$STOCK_VBMETA_SYSTEM" "$STOCK_VBMETA_VENDOR" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$OUT/vbmeta.img" "$OUT/vbmeta_system.img" "$OUT/boot.img" "$OUT/recovery.img" "$VENDOR_CIT_RC" "$BOOT" "$RECOVERY" "$DTBO" "$INIT_BOOT" "$VENDOR_BOOT" "$VDLKM" "$SDLKM" "$PVMFW"; do
   [ -f "$f" ] || { echo "!! MISSING: $f"; exit 1; }
   printf "  ok  %-10s  %s\n" "$(numfmt --to=iec "$(stat -c%s "$f")")" "$f"
 done
@@ -59,11 +65,32 @@ require_sha256 "$VDLKM" 7324ed035103264933f1315bb3bf8db7724cd38c11709ef834dc5e6d
 require_sha256 "$SDLKM" 5422a1b8369121b1153d44c3dbabc61a1b60e3fe3c52a9fb023787397793c5ea
 require_sha256 "$PVMFW" 94d31f6d056be08ba5da59da6c15ec9a2e569e66c7f21d2b7c6590f3d690d095
 require_sha256 "$BOOT" 02e1e78b12f40e734a26516da8db0953c5db567869e83a46f8589a48fc3b1689
+require_sha256 "$RECOVERY" 3a698852008dc3d00f100e7fe73cfb538fe62abbd6e9ab3398868485d3023ae5
 require_sha256 "$DTBO" 5ab869ef8b202c5881378851d768793c613cfe7c422a0fd81d36a04a92c09584
 require_sha256 "$INIT_BOOT" 940a06b1b6be16e27f0be891f6f872fe4b748e577cd1ea6ca7ee2e4fdaf7ba55
 require_sha256 "$VENDOR_BOOT" 660cefc2a32d6220c5f9393d0fd2748087ba7651277d236c2417042d2d1ebad0
 require_sha256 "$STOCK_VBMETA_SYSTEM" 6a69203f0bfc9119bb95fc49b424ed8334783e9625b90d69b5c3f57397bfc1ef
 require_sha256 "$STOCK_VBMETA_VENDOR" 85b2a234a8742606a6c30cdd71b0b98e1562b2e3fc58c114bc69f1a898221d6b
+
+if grep -Eq '^[[:space:]]*mkdir[[:space:]]+/data/config([[:space:]]|$)' "$VENDOR_CIT_RC"; then
+  echo "!! vendor still contains Nothing's fatal /data/config factory hook." >&2
+  exit 1
+fi
+echo "  Nothing /data/config factory hook is absent"
+
+# B4.1 ships vendor as EROFS. Building the same payload as ext4 expands the
+# AVB image past 4 GiB and the phone returns to FastBoot before early adb.
+VENDOR_MAGIC=$(od -An -tx1 -j1024 -N4 "$OUT/vendor.img" | tr -d '[:space:]')
+VENDOR_BYTES=$(stat -c%s "$OUT/vendor.img")
+if [ "$VENDOR_MAGIC" != e2e1f5e0 ]; then
+  echo "!! vendor.img is not EROFS." >&2
+  exit 1
+fi
+if [ "$VENDOR_BYTES" -ge 4294967296 ]; then
+  echo "!! vendor.img is at or above the 4 GiB boot boundary: $VENDOR_BYTES bytes." >&2
+  exit 1
+fi
+echo "  vendor is EROFS and below 4 GiB: $VENDOR_BYTES bytes"
 
 # The payload is the exact B4.1 boot image, so its AVB metadata must describe
 # that input rather than the Android 16 userspace being built around it. The
@@ -111,6 +138,26 @@ if ! diff -u \
   echo "!! rebuilt boot AVB properties differ from the exact B4.1 input." >&2
   exit 1
 fi
+
+# Recovery is chained during normal boot. Keep the proved B4.1 payload and
+# identity while switching only its signature to the development key.
+install -m 0644 "$RECOVERY" "$RECOVERY_OUT"
+"$AVB" erase_footer --image "$RECOVERY_OUT"
+"$AVB" add_hash_footer \
+  --image "$RECOVERY_OUT" \
+  --partition_size "$(stat -c%s "$RECOVERY")" \
+  --partition_name recovery \
+  --algorithm SHA256_RSA2048 \
+  --key "$KEY" \
+  --rollback_index "$RECOVERY_ROLLBACK" \
+  --salt "$RECOVERY_SALT" \
+  --prop com.android.build.recovery.fingerprint:Nothing/Metroid/Metroid:15/AQ3A.250728.001/2606241457:user/release-keys
+if ! diff -u \
+  <("$AVB" info_image --image "$RECOVERY" | grep '^[[:space:]]*Prop: com.android.build.recovery') \
+  <("$AVB" info_image --image "$RECOVERY_OUT" | grep '^[[:space:]]*Prop: com.android.build.recovery'); then
+  echo "!! rebuilt recovery AVB properties differ from the exact B4.1 input." >&2
+  exit 1
+fi
 SYSTEM_ROLLBACK=$STOCK_SYSTEM_ROLLBACK
 if [ "$BUILT_SYSTEM_ROLLBACK" -gt "$STOCK_SYSTEM_ROLLBACK" ]; then
   SYSTEM_ROLLBACK=$BUILT_SYSTEM_ROLLBACK
@@ -145,10 +192,23 @@ install -m 0644 "$PVMFW" "$PVMFW_OUT"
   --include_descriptors_from_image "$OUT/product.img" \
   --include_descriptors_from_image "$PVMFW_OUT" \
   --output "$OUT/vbmeta_system.img"
-truncate -s 65536 "$OUT/vbmeta_system.img"
+python3 "$SCRIPT_DIR/replace_vbmeta_properties.py" \
+  --avbtool "$AVB_PY" \
+  --descriptors-from "$OUT/vbmeta_system.img" \
+  --properties-from "$STOCK_VBMETA_SYSTEM" \
+  --output "$WORK/vbmeta_system.stockprops.img" \
+  --key "$KEY" \
+  --rollback-index "$SYSTEM_ROLLBACK"
+install -m 0644 "$WORK/vbmeta_system.stockprops.img" "$OUT/vbmeta_system.img"
 echo "  vbmeta_system.img = $(stat -c%s "$OUT/vbmeta_system.img") bytes"
 if ! "$AVB" info_image --image "$OUT/vbmeta_system.img" | grep -q 'Partition Name:.*pvmfw'; then
   echo "!! vbmeta_system does not contain the B4.1 pvmfw descriptor." >&2
+  exit 1
+fi
+if ! diff -u \
+  <("$AVB" info_image --image "$STOCK_VBMETA_SYSTEM" | grep '^[[:space:]]*Prop:') \
+  <("$AVB" info_image --image "$OUT/vbmeta_system.img" | grep '^[[:space:]]*Prop:'); then
+  echo "!! vbmeta_system AVB properties differ from the exact B4.1 input." >&2
   exit 1
 fi
 echo "=== [3/5] coherent vbmeta_vendor (LOS vendor + populated dlkm + odm) ==="
@@ -160,8 +220,21 @@ install -m 0644 "$SDLKM" "$SDLKM_OUT"
   --include_descriptors_from_image "$SDLKM_OUT" \
   --include_descriptors_from_image "$OUT/odm.img" \
   --output "$OUT/vbmeta_vendor.img"
-truncate -s 65536 "$OUT/vbmeta_vendor.img"
+python3 "$SCRIPT_DIR/replace_vbmeta_properties.py" \
+  --avbtool "$AVB_PY" \
+  --descriptors-from "$OUT/vbmeta_vendor.img" \
+  --properties-from "$STOCK_VBMETA_VENDOR" \
+  --output "$WORK/vbmeta_vendor.stockprops.img" \
+  --key "$KEY" \
+  --rollback-index "$VENDOR_ROLLBACK"
+install -m 0644 "$WORK/vbmeta_vendor.stockprops.img" "$OUT/vbmeta_vendor.img"
 echo "  vbmeta_vendor.img = $(stat -c%s "$OUT/vbmeta_vendor.img") bytes"
+if ! diff -u \
+  <("$AVB" info_image --image "$STOCK_VBMETA_VENDOR" | grep '^[[:space:]]*Prop:') \
+  <("$AVB" info_image --image "$OUT/vbmeta_vendor.img" | grep '^[[:space:]]*Prop:'); then
+  echo "!! vbmeta_vendor AVB properties differ from the exact B4.1 input." >&2
+  exit 1
+fi
 "$AVB" info_image --image "$OUT/vbmeta_vendor.img" 2>&1 | grep -iE "Partition Name|Rollback" | head
 echo "=== [4/5] coherent root vbmeta (B4.1 boot inputs + both child chains) ==="
 "$AVB" make_vbmeta_image --algorithm SHA256_RSA2048 --key "$KEY" --padding_size 4096 --rollback_index "$TOP_ROLLBACK" \
