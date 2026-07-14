@@ -182,7 +182,10 @@ BOARD_MOVE_GSI_AVB_KEYS_TO_VENDOR_BOOT := true
 
 BOARD_AVB_BOOT_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem
 BOARD_AVB_BOOT_ALGORITHM := SHA256_RSA2048
-BOARD_AVB_BOOT_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)
+# B4.1 ships a boot rollback index newer than Lineage's platform patch
+# timestamp. Falling below this floor makes the bootloader mark the slot
+# unbootable before the kernel starts.
+BOARD_AVB_BOOT_ROLLBACK_INDEX := 1775347200
 BOARD_AVB_BOOT_ROLLBACK_INDEX_LOCATION := 3
 
 BOARD_AVB_RECOVERY_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem

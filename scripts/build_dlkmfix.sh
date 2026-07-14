@@ -66,8 +66,16 @@ BUILT_SYSTEM_ROLLBACK=$("$AVB" info_image --image "$OUT/vbmeta_system.img" | awk
 STOCK_SYSTEM_ROLLBACK=$("$AVB" info_image --image "$STOCK_VBMETA_SYSTEM" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
 VENDOR_ROLLBACK=$("$AVB" info_image --image "$STOCK_VBMETA_VENDOR" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
 TOP_ROLLBACK=$("$AVB" info_image --image "$OUT/vbmeta.img" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
-if [ -z "$BUILT_SYSTEM_ROLLBACK" ] || [ -z "$STOCK_SYSTEM_ROLLBACK" ] || [ -z "$VENDOR_ROLLBACK" ] || [ -z "$TOP_ROLLBACK" ]; then
-  echo "!! Could not read the built/stock vbmeta rollback indexes." >&2
+BUILT_BOOT_ROLLBACK=$("$AVB" info_image --image "$OUT/boot.img" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
+STOCK_BOOT_ROLLBACK=$("$AVB" info_image --image "$BOOT" | awk '$1 == "Rollback" && $2 == "Index:" { print $3; exit }')
+if [ -z "$BUILT_SYSTEM_ROLLBACK" ] || [ -z "$STOCK_SYSTEM_ROLLBACK" ] || [ -z "$VENDOR_ROLLBACK" ] || [ -z "$TOP_ROLLBACK" ] || [ -z "$BUILT_BOOT_ROLLBACK" ] || [ -z "$STOCK_BOOT_ROLLBACK" ]; then
+  echo "!! Could not read the built/stock AVB rollback indexes." >&2
+  exit 1
+fi
+if [ "$BUILT_BOOT_ROLLBACK" -lt "$STOCK_BOOT_ROLLBACK" ]; then
+  echo "!! boot rollback index is below the B4.1 input." >&2
+  echo "   built $BUILT_BOOT_ROLLBACK" >&2
+  echo "   stock $STOCK_BOOT_ROLLBACK" >&2
   exit 1
 fi
 SYSTEM_ROLLBACK=$STOCK_SYSTEM_ROLLBACK
@@ -77,6 +85,7 @@ fi
 echo "  vbmeta_system rollback index: $SYSTEM_ROLLBACK"
 echo "  vbmeta_vendor rollback index: $VENDOR_ROLLBACK"
 echo "  top-level vbmeta rollback index: $TOP_ROLLBACK"
+echo "  boot rollback index: $BUILT_BOOT_ROLLBACK (B4.1 floor $STOCK_BOOT_ROLLBACK)"
 if ! "$AVB" info_image --image "$OUT/vbmeta.img" | grep -A4 'Chain Partition descriptor:' | grep -q 'Partition Name:.*vbmeta_vendor'; then
   echo "!! Top-level vbmeta does not chain vbmeta_vendor." >&2
   exit 1
