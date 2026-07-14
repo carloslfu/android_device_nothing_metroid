@@ -12,6 +12,7 @@ AVB=$TOOLS/avbtool
 VDLKM=$MK/vendor_dlkm.img      # populated 57.8MB (339 .ko)
 SDLKM=$MK/system_dlkm.img      # populated 7.6MB
 PVMFW=$MK/pvmfw.img            # exact B4.1 protected-VM firmware
+BOOT=$MK/boot.img              # exact B4.1 GKI container; boot ramdisk is empty
 DTBO=$MK/dtbo.img              # exact B4.1 device-tree overlays
 INIT_BOOT=$MK/init_boot.img    # exact B4.1 generic ramdisk
 VENDOR_BOOT=$MK/vendor_boot.img # exact B4.1 vendor ramdisk + first-stage fstab
@@ -42,7 +43,7 @@ require_sha256() {
 
 cd "$TOP"
 echo "=== [1/5] sanity: inputs exist ==="
-for f in "$AVB" "$TOOLS/build_super_image" "$KEY" "$STOCK_VBMETA_SYSTEM" "$STOCK_VBMETA_VENDOR" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$OUT/vbmeta.img" "$OUT/vbmeta_system.img" "$OUT/boot.img" "$OUT/recovery.img" "$DTBO" "$INIT_BOOT" "$VENDOR_BOOT" "$VDLKM" "$SDLKM" "$PVMFW"; do
+for f in "$AVB" "$TOOLS/build_super_image" "$TOOLS/unpack_bootimg" "$KEY" "$STOCK_VBMETA_SYSTEM" "$STOCK_VBMETA_VENDOR" "$OUT/system.img" "$OUT/vendor.img" "$OUT/product.img" "$OUT/system_ext.img" "$OUT/odm.img" "$OUT/vbmeta.img" "$OUT/vbmeta_system.img" "$OUT/boot.img" "$OUT/recovery.img" "$BOOT" "$DTBO" "$INIT_BOOT" "$VENDOR_BOOT" "$VDLKM" "$SDLKM" "$PVMFW"; do
   [ -f "$f" ] || { echo "!! MISSING: $f"; exit 1; }
   printf "  ok  %-10s  %s\n" "$(numfmt --to=iec "$(stat -c%s "$f")")" "$f"
 done
@@ -55,6 +56,7 @@ sha256sum "$PVMFW" | cut -d' ' -f1
 require_sha256 "$VDLKM" 7324ed035103264933f1315bb3bf8db7724cd38c11709ef834dc5e6d371cf5ec
 require_sha256 "$SDLKM" 5422a1b8369121b1153d44c3dbabc61a1b60e3fe3c52a9fb023787397793c5ea
 require_sha256 "$PVMFW" 94d31f6d056be08ba5da59da6c15ec9a2e569e66c7f21d2b7c6590f3d690d095
+require_sha256 "$BOOT" 02e1e78b12f40e734a26516da8db0953c5db567869e83a46f8589a48fc3b1689
 require_sha256 "$DTBO" 5ab869ef8b202c5881378851d768793c613cfe7c422a0fd81d36a04a92c09584
 require_sha256 "$INIT_BOOT" 940a06b1b6be16e27f0be891f6f872fe4b748e577cd1ea6ca7ee2e4fdaf7ba55
 require_sha256 "$VENDOR_BOOT" 660cefc2a32d6220c5f9393d0fd2748087ba7651277d236c2417042d2d1ebad0
@@ -81,6 +83,15 @@ if ! "$AVB" info_image --image "$OUT/vbmeta.img" | grep -A4 'Chain Partition des
 fi
 echo "  top-level vbmeta chains vbmeta_vendor"
 "$AVB" extract_public_key --key "$KEY" --output "$PUBKEY"
+mkdir "$WORK/stock-boot" "$WORK/built-boot"
+"$TOOLS/unpack_bootimg" --boot_img "$BOOT" --out "$WORK/stock-boot" >/dev/null
+"$TOOLS/unpack_bootimg" --boot_img "$OUT/boot.img" --out "$WORK/built-boot" >/dev/null
+if [ -s "$WORK/stock-boot/ramdisk" ] || [ -s "$WORK/built-boot/ramdisk" ]; then
+  echo "!! metroid boot.img must have an empty ramdisk; init_boot owns the generic ramdisk." >&2
+  exit 1
+fi
+cmp "$WORK/stock-boot/kernel" "$WORK/built-boot/kernel"
+echo "  boot kernel matches B4.1 and both boot ramdisks are empty"
 echo "=== [2/5] stage B4.1 boot inputs + coherent vbmeta_system ==="
 install -m 0644 "$DTBO" "$DTBO_OUT"
 install -m 0644 "$INIT_BOOT" "$INIT_BOOT_OUT"

@@ -9,7 +9,9 @@ LUNCH_TARGET="${METROID_LUNCH_TARGET:-lineage_metroid-bp2a-userdebug}"
 JOBS="${METROID_JOBS:-$(nproc)}"
 
 cd "$TOP"
+set +u
 # shellcheck source=/dev/null
 source build/envsetup.sh >/dev/null
 lunch "$LUNCH_TARGET" >/dev/null
+set -u
 exec m -j"$JOBS" "$@"

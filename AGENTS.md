@@ -52,6 +52,14 @@ known-good state. Git tag: **`known-good-boot-20260708`** (this repo).
    `PRODUCT_SYSTEM_PROPERTIES`). It must be in **/system/build.prop** (not vendor) —
    it gives the 240s Watchdog needed to survive the slow imageless first boot.
 
+6. **`boot.img` must keep the B4.1 zero-ramdisk layout.** This device loads the
+   generic ramdisk from `init_boot`. Declaring only `BOARD_PREBUILT_INIT_BOOT_IMAGE`
+   makes AOSP treat init_boot as not being built and silently puts a second generic
+   ramdisk in the generated boot image. The result passes AVB checks but fails before
+   early adb. Keep `BOARD_PREBUILT_BOOTIMAGE` pointed at the exact B4.1 container;
+   AOSP re-signs it with the development key. `build_dlkmfix.sh` unpacks both copies
+   and rejects a non-empty boot ramdisk or kernel mismatch.
+
 ---
 
 ## RESTORE (if boot breaks)
