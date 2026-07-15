@@ -93,6 +93,10 @@ PRODUCT_PACKAGES +=     android.hardware.usb-service.qti     android.hardware.us
 # Vibrator HAL (vendor/qcom/opensource/vibrator/aidl, default namespace)
 PRODUCT_PACKAGES +=     vendor.qti.hardware.vibrator.service
 
+# Sensors use Nothing's B4.1 AIDL V2 multihal binary and stock sub-HAL set.
+# The Android 16 source service implements a different AIDL revision.
+PRODUCT_PACKAGES +=     android.hardware.sensors-service.multihal.metroid
+
 # Vendor servicemanager (frameworks/native) - vndservice_contexts users need it
 PRODUCT_PACKAGES +=     vndservicemanager
 
