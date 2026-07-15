@@ -38,4 +38,13 @@
             <instance>default</instance>
         </interface>
     </hal>
+    <hal format="aidl" optional="true">
+        <name>vendor.qti.hardware.radio.qtiradio</name>
+        <version>16</version>
+        <interface>
+            <name>IQtiRadioStable</name>
+            <instance>slot1</instance>
+            <instance>slot2</instance>
+        </interface>
+    </hal>
 </compatibility-matrix>
