@@ -845,6 +845,7 @@ vendor/bin/hw/vendor.qti.hardware.c2pa-aidl-service-qti
 vendor/bin/hw/vendor.qti.hardware.capabilityconfigstore-service
 vendor/bin/hw/vendor.qti.hardware.display.color-service
 vendor/bin/hw/vendor.qti.hardware.lights.service
+vendor/bin/hw/vendor.qti.hardware.memtrack-service
 vendor/bin/hw/vendor.qti.hardware.minkipcbinder@1.0-service
 vendor/bin/hw/vendor.qti.hardware.perf2-hal-service
 vendor/bin/hw/vendor.qti.hardware.qseecom@1.0-service
