@@ -148,6 +148,10 @@ $(call inherit-product-if-exists, vendor/nothing/metroid/metroid-vendor.mk)
 # Bring-up build21: no_fatal blanket for observability (keep device up past ~29s for adb)
 PRODUCT_COPY_FILES += $(LOCAL_PATH)/rootdir/etc/init.bringup_nofatal.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.bringup_nofatal.rc
 
+# Load the stock TIPC kernel module before NICM starts. NICM gates the DSI
+# ready callback used by both cellular-data RIL instances.
+PRODUCT_COPY_FILES += $(LOCAL_PATH)/rootdir/etc/init.metroid.data.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.metroid.data.rc
+
 # Bring-up build23: copy fstab.qcom to vendor partition and ramdisks (first-stage mount)
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/rootdir/etc/fstab.qcom:$(TARGET_COPY_OUT_VENDOR)/etc/fstab.qcom \
@@ -191,7 +195,8 @@ PRODUCT_PACKAGES += \
     vendor.qti.data.factoryservice.metroid.xml \
     vendor.qti.hardware.mwqemadapteraidlservice.metroid.xml \
     vendor.qti.memory.pasrmanager-service.metroid.xml \
-    qms-saidl.metroid.xml
+    qms-saidl.metroid.xml \
+    qti_radio_extensions.metroid.xml
 
 # IPACM links these source-built libraries at process start. Transitive module
 # dependencies built them in staging but did not place them in the frozen

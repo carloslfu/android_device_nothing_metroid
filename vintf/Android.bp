@@ -122,3 +122,11 @@ vintf_fragment {
     src: "qms-saidl.xml",
     vendor: true,
 }
+
+// QTI radio extensions from B4.1. These matching services run on metroid and
+// register only when servicemanager sees their device-manifest contracts.
+vintf_fragment {
+    name: "qti_radio_extensions.metroid.xml",
+    src: "qti_radio_extensions.metroid.xml",
+    vendor: true,
+}

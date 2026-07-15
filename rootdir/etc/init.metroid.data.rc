@@ -1,0 +1,6 @@
+# Qualcomm's NICM transport uses AF_TIPC. The B4.1 system_dlkm image ships
+# tipc.ko but leaves modules.load empty, so load it before class-main nicmd.
+# Without this, dsi_init_ex() starts but its ready callback never runs and
+# every cellular setup request fails with OEM_DCFAILCAUSE_4.
+on early-init
+    exec u:r:vendor_modprobe:s0 -- /vendor/bin/modprobe -a -d /system/lib/modules tipc
