@@ -7,6 +7,22 @@ soong_namespace {
     ],
 }
 
+// B4.1's IMS APK resolves these JNI libraries through its app-native library
+// directory. Keep the stock layout without copying the same binaries twice.
+install_symlink {
+    name: "metroid_ims_libimscamera_jni_symlink",
+    system_ext_specific: true,
+    installed_location: "priv-app/ims/lib/arm64/libimscamera_jni.so",
+    symlink_target: "/system_ext/lib64/libimscamera_jni.so",
+}
+
+install_symlink {
+    name: "metroid_ims_libimsmedia_jni_symlink",
+    system_ext_specific: true,
+    installed_location: "priv-app/ims/lib/arm64/libimsmedia_jni.so",
+    symlink_target: "/system_ext/lib64/libimsmedia_jni.so",
+}
+
 install_symlink {
     name: "firmware_wlanmdsp.otaupdate_symlink",
     vendor: true,

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     SPDX-FileCopyrightText: 2026 The phone.md Project
+     SPDX-License-Identifier: Apache-2.0
+-->
+<resources>
+    <!-- B4.1's org.codeaurora.ims is the implementation paired with the
+         device's running Qualcomm IImsRadio services. Do not import the stock
+         telephony_injection.xml: its QtiDataProfileManager targets Nothing's
+         older framework API and crashes the Android 16 phone process. -->
+    <string name="config_ims_mmtel_package" translatable="false">org.codeaurora.ims</string>
+</resources>

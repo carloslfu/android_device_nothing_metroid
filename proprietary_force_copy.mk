@@ -1,4 +1,17 @@
 # Generated makefile to force copy missing proprietary blobs
+
+# B4.1's ImsService is the framework endpoint for the Qualcomm IMS HALs that
+# run on metroid. The APK stays presigned; the current source-built support jar
+# supplies its public uses-library contract.
+PRODUCT_COPY_FILES += \
+    vendor/nothing/metroid/proprietary/system_ext/priv-app/ims/ims.apk:$(TARGET_COPY_OUT_SYSTEM_EXT)/priv-app/ims/ims.apk
+
+PRODUCT_PACKAGES += \
+    ims-ext-common \
+    ims_ext_common.xml \
+    metroid_ims_libimscamera_jni_symlink \
+    metroid_ims_libimsmedia_jni_symlink
+
 PRODUCT_COPY_FILES += \
     vendor/nothing/metroid/proprietary/system_ext/etc/permissions/extphonelib.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/extphonelib.xml \
     vendor/nothing/metroid/proprietary/system_ext/etc/permissions/qti_telephony_hidl_wrapper.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/qti_telephony_hidl_wrapper.xml \
