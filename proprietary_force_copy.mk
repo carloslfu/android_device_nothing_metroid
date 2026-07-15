@@ -3,10 +3,8 @@
 # B4.1's ImsService is the framework endpoint for the Qualcomm IMS HALs that
 # run on metroid. The APK stays presigned; the current source-built support jar
 # supplies its public uses-library contract.
-PRODUCT_COPY_FILES += \
-    vendor/nothing/metroid/proprietary/system_ext/priv-app/ims/ims.apk:$(TARGET_COPY_OUT_SYSTEM_EXT)/priv-app/ims/ims.apk
-
 PRODUCT_PACKAGES += \
+    ims \
     ims-ext-common \
     ims_ext_common.xml \
     metroid_ims_libimscamera_jni_symlink \
