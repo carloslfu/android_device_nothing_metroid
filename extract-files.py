@@ -53,6 +53,20 @@ VENDOR_MEM_SLEEP_ALLOW = (
     '(file (write lock append map open)))'
 )
 
+VENDOR_QMIPRIOD_TRANSITION = (
+    '(typetransition init_202404 vendor_qmipriod_exec process '
+    'vendor_qmipriod)'
+)
+
+VENDOR_QMIPRIOD_DATA_ALLOW = '\n'.join([
+    '(allow vendor_qmipriod vendor_qmipriod_data_file '
+    '(dir (ioctl read write getattr lock open watch watch_reads add_name '
+    'remove_name search)))',
+    '(allow vendor_qmipriod vendor_qmipriod_data_file '
+    '(file (ioctl read write create getattr setattr lock append map unlink '
+    'rename open watch watch_reads)))',
+])
+
 blob_fixups: blob_fixups_user_type = {
     # The stock blob imports AHardwareBuffer functions without naming their
     # provider. Make the runtime dependency explicit instead of relying on the
@@ -81,6 +95,14 @@ blob_fixups: blob_fixups_user_type = {
                 'vendor_sysfs_suspend',
                 'sysfs_mem_sleep',
             ),
+        )
+        # The source QCOM policy grants this access only on userdebug/eng, but
+        # the final image installs Nothing's stock CIL instead of that source
+        # output. qmipriod creates and reads this exact /data/vendor subtree on
+        # every build type, so preserve the generated policy's narrow rules.
+        .regex_replace(
+            re.escape(VENDOR_QMIPRIOD_TRANSITION),
+            VENDOR_QMIPRIOD_TRANSITION + '\n' + VENDOR_QMIPRIOD_DATA_ALLOW,
         ),
 }  # fmt: skip
 

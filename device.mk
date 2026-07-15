@@ -179,6 +179,18 @@ PRODUCT_PACKAGES += hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.met
 # batch 4 (2026-07-10, live-verified): radio HALs + clearkey + qspa VINTF declarations
 PRODUCT_PACKAGES += android.hardware.radio.config.metroid4.xml android.hardware.radio.data.metroid4.xml android.hardware.radio.messaging.metroid4.xml android.hardware.radio.modem.metroid4.xml android.hardware.radio.network.metroid4.xml android.hardware.radio.sim.metroid4.xml android.hardware.radio.voice.metroid4.xml android.hardware.drm-service.clearkey.metroid4.xml vendor.qti.qspa-service.metroid4.xml
 
+# Nothing's CNE binary serves these AIDL interfaces, while DPM consumes the
+# MWQEM adapter. The stock declarations were missing from the imported tree,
+# so both processes stayed alive but servicemanager rejected the contracts.
+PRODUCT_PACKAGES += \
+    vendor.qti.data.factoryservice.metroid.xml \
+    vendor.qti.hardware.mwqemadapteraidlservice.metroid.xml
+
+# IPACM links this source-built library at process start. A transitive module
+# dependency built it in staging but did not place it in the frozen vendor
+# image, leaving IPACM in a linker restart loop.
+PRODUCT_PACKAGES += liboffloadhal
+
 # Force copy missing proprietary files
 $(call inherit-product-if-exists, device/nothing/metroid/proprietary_force_copy.mk)
 
@@ -236,6 +248,11 @@ PRODUCT_PACKAGES += \
 
 DEVICE_PACKAGE_OVERLAYS += device/nothing/metroid/overlay
 
+# The stock NFC service is disabled until this factory-persisted completion
+# property becomes 1. Fresh phone.md data has no factory property store, and
+# B4.1 ships no nqnfcinfo helper that could set it again. Seed the same state
+# so the stock HAL starts on clean custom-OS installs.
+PRODUCT_VENDOR_PROPERTIES += persist.vendor.nfc_getcplc_completed=1
 
 # Camera: skip Morpho EIS init in GME node (SIGILL in libmorpho_video_stabilizer on first
 # frame; forces QTIGMEWrapper instead). Verified live 2026-07-10 — camera preview + capture work.

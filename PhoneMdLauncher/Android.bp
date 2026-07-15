@@ -14,6 +14,11 @@ android_app_import {
         enabled: false,
     },
     overrides: [
+        // Qualcomm's tuna stack exposes no legacy effect UUIDs for Lineage
+        // AudioFX. Its service then handles pending audio-session intents
+        // after aborting initialization and crash-loops on a null manager.
+        // phone.md owns the voice/audio UX and does not ship that equalizer.
+        "AudioFX",
         "Launcher3",
         "Launcher3QuickStep",
         "LineageSetupWizard",

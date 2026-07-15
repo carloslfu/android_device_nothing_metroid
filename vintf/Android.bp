@@ -91,3 +91,17 @@ vintf_fragment {
     src: "vendor.qti.qspa-service.xml",
     vendor: true,
 }
+
+// CNE/MWQEM contracts copied from the exact B4.1 vendor image. The matching
+// CNE binary is already shipped and registers both services when declared.
+vintf_fragment {
+    name: "vendor.qti.data.factoryservice.metroid.xml",
+    src: "vendor.qti.data.factoryservice.xml",
+    vendor: true,
+}
+
+vintf_fragment {
+    name: "vendor.qti.hardware.mwqemadapteraidlservice.metroid.xml",
+    src: "vendor.qti.hardware.mwqemadapteraidlservice.xml",
+    vendor: true,
+}
