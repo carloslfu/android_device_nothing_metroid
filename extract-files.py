@@ -67,6 +67,16 @@ VENDOR_QMIPRIOD_DATA_ALLOW = '\n'.join([
     'rename open watch watch_reads)))',
 ])
 
+VENDOR_HAL_NFC_DATA_DIR_ALLOW = (
+    '(allow hal_nfc_default vendor_nfc_vendor_data_file '
+    '(dir (ioctl read write getattr lock open watch watch_reads add_name '
+    'remove_name search)))'
+)
+
+VENDOR_NFC_DATA_DIR_SEARCH_ALLOW = (
+    '(allow nfc vendor_nfc_vendor_data_file (dir (search)))'
+)
+
 CND_SERVICE_DECLARATION = '\n'.join([
     'service vendor.cnd /system/vendor/bin/cnd',
     '    class main',
@@ -79,6 +89,25 @@ CND_ANDROID16_SERVICE_DECLARATION = '\n'.join([
     '    interface aidl vendor.qti.data.factoryservice.IFactory/default',
     '    interface aidl '
     'vendor.qti.hardware.mwqemadapteraidlservice.IMwqemAdapter/MwqemAdapter',
+    '    disabled',
+])
+
+QMS_SERVICE_DECLARATION = '\n'.join([
+    'service vendor.qms /vendor/bin/qms',
+    '     class main',
+    '    disabled',
+])
+
+QMS_ANDROID16_SERVICE_DECLARATION = '\n'.join([
+    'service vendor.qms /vendor/bin/qms',
+    '    class main',
+    '    interface aidl vendor.qti.data.qmsservice.IQmsService',
+    '    interface aidl vendor.qti.qhcp.IQHDC/default',
+    '    interface aidl '
+    'vendor.qti.data.txpwrservice.ITxPwrService/default',
+    '    interface aidl '
+    'vendor.qti.data.ntn.IQmsSatelliteService/default',
+    '    interface aidl vendor.qti.data.dmapconsent.IService/default',
     '    disabled',
 ])
 
@@ -106,6 +135,14 @@ blob_fixups: blob_fixups_user_type = {
             re.escape(CND_SERVICE_DECLARATION),
             CND_ANDROID16_SERVICE_DECLARATION,
         ),
+    # QMS is a disabled multi-interface service. Consumers ask servicemanager
+    # for these names before the process exists, so init needs every served
+    # AIDL name to resolve the lazy-start request.
+    'vendor/etc/init/qms.rc': blob_fixup()
+        .regex_replace(
+            re.escape(QMS_SERVICE_DECLARATION),
+            QMS_ANDROID16_SERVICE_DECLARATION,
+        ),
     # Android 16 owns /sys/power/mem_sleep through sysfs_mem_sleep. The stock
     # Android 15 vendor policy labels the same node with a private type, which
     # makes second-stage init's split-policy compile fail. Keep the original
@@ -126,6 +163,14 @@ blob_fixups: blob_fixups_user_type = {
         .regex_replace(
             re.escape(VENDOR_QMIPRIOD_TRANSITION),
             VENDOR_QMIPRIOD_TRANSITION + '\n' + VENDOR_QMIPRIOD_DATA_ALLOW,
+        )
+        # The NFC app searches the HAL's vendor data directory during normal
+        # startup. The device source rule is not part of the installed stock
+        # vendor CIL, so carry the same narrow permission in the active policy.
+        .regex_replace(
+            re.escape(VENDOR_HAL_NFC_DATA_DIR_ALLOW),
+            VENDOR_HAL_NFC_DATA_DIR_ALLOW + '\n' +
+            VENDOR_NFC_DATA_DIR_SEARCH_ALLOW,
         ),
 }  # fmt: skip
 

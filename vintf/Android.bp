@@ -105,3 +105,20 @@ vintf_fragment {
     src: "vendor.qti.hardware.mwqemadapteraidlservice.xml",
     vendor: true,
 }
+
+// PASR serves this AIDL instance and aborts when servicemanager cannot find
+// the declaration. This is the exact standalone fragment from B4.1.
+vintf_fragment {
+    name: "vendor.qti.memory.pasrmanager-service.metroid.xml",
+    src: "vendor.qti.memory.pasrmanager-service.xml",
+    vendor: true,
+}
+
+// QMS registers the stock satellite, transmit-power, and consent contracts.
+// Its qhcp and qmsservice names are internal services and need init mappings,
+// not stable VINTF declarations.
+vintf_fragment {
+    name: "qms-saidl.metroid.xml",
+    src: "qms-saidl.xml",
+    vendor: true,
+}

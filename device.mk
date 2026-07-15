@@ -184,12 +184,16 @@ PRODUCT_PACKAGES += android.hardware.radio.config.metroid4.xml android.hardware.
 # so both processes stayed alive but servicemanager rejected the contracts.
 PRODUCT_PACKAGES += \
     vendor.qti.data.factoryservice.metroid.xml \
-    vendor.qti.hardware.mwqemadapteraidlservice.metroid.xml
+    vendor.qti.hardware.mwqemadapteraidlservice.metroid.xml \
+    vendor.qti.memory.pasrmanager-service.metroid.xml \
+    qms-saidl.metroid.xml
 
-# IPACM links this source-built library at process start. A transitive module
-# dependency built it in staging but did not place it in the frozen vendor
-# image, leaving IPACM in a linker restart loop.
-PRODUCT_PACKAGES += liboffloadhal
+# IPACM links these source-built libraries at process start. Transitive module
+# dependencies built them in staging but did not place them in the frozen
+# vendor image, leaving IPACM in a linker restart loop.
+PRODUCT_PACKAGES += \
+    libipanat \
+    liboffloadhal
 
 # Force copy missing proprietary files
 $(call inherit-product-if-exists, device/nothing/metroid/proprietary_force_copy.mk)
