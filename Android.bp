@@ -28,3 +28,25 @@ install_symlink {
     symlink_target: "/vendor/etc/wifi/wcn7750/WCNSS_qcom_cfg.ini",
 }
 
+// EROFS drops empty directories. These harmless entries keep the three
+// firmware mount targets in vendor.img until first-stage init mounts over them.
+install_symlink {
+    name: "firmware_mnt.mountpoint_symlink",
+    vendor: true,
+    installed_location: "firmware_mnt/.mountpoint",
+    symlink_target: "/dev/null",
+}
+
+install_symlink {
+    name: "dsp.mountpoint_symlink",
+    vendor: true,
+    installed_location: "dsp/.mountpoint",
+    symlink_target: "/dev/null",
+}
+
+install_symlink {
+    name: "bt_firmware.mountpoint_symlink",
+    vendor: true,
+    installed_location: "bt_firmware/.mountpoint",
+    symlink_target: "/dev/null",
+}

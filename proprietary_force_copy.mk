@@ -184,7 +184,7 @@ PRODUCT_COPY_FILES += \
 # 1) stock wifi HAL service (AOSP generic has no vendor impl) + libs + wcn7750 driver cfg
 # 2) NDK/dep libs absent from this build but required by shipped blobs:
 #    radio-V3-ndk -> qcrilNrd (CELL), wifi.common-V1-ndk -> wifi HAL,
-#    cameraservice.common-V1-ndk -> noth camera ext, libtinycompress+closure -> audio HAL/PAL.
+#    cameraservice.common-V1-ndk -> noth camera ext, libtinycompress -> audio HAL/PAL.
 # All verified live on device via /vendor/lib64 overlay before staging.
 PRODUCT_COPY_FILES += \
     vendor/nothing/metroid/proprietary/vendor/etc/wifi/wcn7750/WCNSS_qcom_cfg.ini:$(TARGET_COPY_OUT_VENDOR)/etc/wifi/wcn7750/WCNSS_qcom_cfg.ini \
@@ -193,20 +193,11 @@ PRODUCT_COPY_FILES += \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.radio-V3-ndk.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.radio-V3-ndk.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.frameworks.cameraservice.common-V1-ndk.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.frameworks.cameraservice.common-V1-ndk.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libtinycompress.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libtinycompress.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libaudioserviceexampleimpl.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libaudioserviceexampleimpl.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.audio.common@5.0.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.audio.common@5.0.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.bluetooth.audio@2.0.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.bluetooth.audio@2.0.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.bluetooth.audio@2.1.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.bluetooth.audio@2.1.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/android.hardware.bluetooth.audio-impl.so:$(TARGET_COPY_OUT_VENDOR)/lib64/android.hardware.bluetooth.audio-impl.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libalsautilsv2.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libalsautilsv2.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libaudioaidlcommon.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libaudioaidlcommon.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libaudio_aidl_conversion_common_ndk.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libaudio_aidl_conversion_common_ndk.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libbluetooth_audio_session_aidl.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libbluetooth_audio_session_aidl.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libflatbuffers-cpp.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libflatbuffers-cpp.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libmediautils_vendor.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libmediautils_vendor.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libmemunreachable.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libmemunreachable.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libnbaio_mono.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libnbaio_mono.so \
-    vendor/nothing/metroid/proprietary/vendor/lib64/libtinyalsav2.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libtinyalsav2.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libwifi-hal.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libwifi-hal.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libwifi-hal-qcom.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libwifi-hal-qcom.so \
     vendor/nothing/metroid/proprietary/vendor/lib64/libwifi-hal-ctrl.so:$(TARGET_COPY_OUT_VENDOR)/lib64/libwifi-hal-ctrl.so \

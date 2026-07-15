@@ -194,20 +194,44 @@ PRODUCT_SYSTEM_PROPERTIES += \
     ro.hw_timeout_multiplier=4 \
     ro.keystore.boot_level_key.strategy=TRUSTED_ENVIRONMENT:MAX_USES_PER_BOOT
 
+# These paths are mount targets for the firmware partitions. EROFS drops empty
+# directories, so keep a harmless symlink in each path until init mounts over it.
+# install_symlink is used because fsgen mistakes firmware_mnt for a subdirectory
+# of its built-in firmware prebuilt type and rejects the resulting ../ path.
+PRODUCT_PACKAGES += \
+    firmware_mnt.mountpoint_symlink \
+    dsp.mountpoint_symlink \
+    bt_firmware.mountpoint_symlink
+
 # audiohalservice.qti loads every interface below with dlopen(), so Soong cannot
 # infer them from normal shared-library dependencies. Keep the XML contract
 # explicit here: a missing mandatory library makes the service exit at boot.
+# The AOSP audio helpers must come from this Android 16 tree. B4.1's copies use
+# older C++ and AIDL layouts and crash the current core implementation.
 PRODUCT_PACKAGES += \
     audiohalservice.qti \
     libagmipcservice \
+    libagm_mixer_plugin \
+    libagm_pcm_plugin \
+    libagm_compress_plugin \
+    libsndcardparser \
     libpalipcservice \
     libpaleventnotifier \
     libaudiocorehal.qti \
     libaudiocorehal.default \
+    qtiaudiohalvendorextn \
+    libaudioserviceexampleimpl \
+    android.hardware.bluetooth.audio-impl \
+    libalsautilsv2.vendor \
+    libaudioaidlcommon.vendor \
+    libaudio_aidl_conversion_common_ndk.vendor \
+    libbluetooth_audio_session_aidl \
+    libmediautils_vendor.vendor \
+    libnbaio_mono \
+    libtinyalsav2.vendor \
     liblistensoundmodelaidl \
     libaudioeffecthal.qti \
     libsoundtriggerhal.qti \
-    android.hardware.bluetooth.audio_sw \
     libqasr
 
 DEVICE_PACKAGE_OVERLAYS += device/nothing/metroid/overlay

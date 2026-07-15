@@ -19,3 +19,8 @@ PRODUCT_MODEL := Phone (3)
 # PhoneMdLauncher's module overrides remove LineageSetupWizard and Provision;
 # PRODUCT_PACKAGES subtraction cannot remove an inherited product package.
 PRODUCT_PACKAGES += PhoneMdLauncher
+
+# There is no scripted setup wizard in phone.md. Seed SettingsProvider as
+# provisioned on fresh data so SystemUI and HOME start normally while the agent
+# handles onboarding in conversation.
+PRODUCT_PACKAGE_OVERLAYS += device/nothing/metroid/phone_md_overlay
