@@ -3046,7 +3046,7 @@ vendor/lib64/libchilog.so
 vendor/lib64/libchinodeevautils.so
 vendor/lib64/libchinodehmeutils.so
 vendor/lib64/libchrome.so
-vendor/lib64/libclang_rt.ubsan_standalone-aarch64-android.so
+-vendor/lib64/libclang_rt.ubsan_standalone-aarch64-android.so
 vendor/lib64/libcld80211.so
 vendor/lib64/libclstc_algorithm_adapter.so
 vendor/lib64/libclstc_gcp_adapter.so

@@ -175,7 +175,7 @@ PRODUCT_COPY_FILES += \
 # mapper.qti.xml dropped 2026-07-10: qcom-caf gralloc source (mapper.qti) now provides the
 # same fragment -> fsgen packaging conflict; the standalone-fragment fix was proven ineffective
 # anyway (see metroid-mapper-vintf-fix-attempt-20260706).
-PRODUCT_PACKAGES += audio_qti_services.metroid.xml audio_effects.metroid.xml hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.metroid.xml camera_provider.metroid.xml
+PRODUCT_PACKAGES += hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.metroid.xml camera_provider.metroid.xml
 # batch 4 (2026-07-10, live-verified): radio HALs + clearkey + qspa VINTF declarations
 PRODUCT_PACKAGES += android.hardware.radio.config.metroid4.xml android.hardware.radio.data.metroid4.xml android.hardware.radio.messaging.metroid4.xml android.hardware.radio.modem.metroid4.xml android.hardware.radio.network.metroid4.xml android.hardware.radio.sim.metroid4.xml android.hardware.radio.voice.metroid4.xml android.hardware.drm-service.clearkey.metroid4.xml vendor.qti.qspa-service.metroid4.xml
 
@@ -194,10 +194,21 @@ PRODUCT_SYSTEM_PROPERTIES += \
     ro.hw_timeout_multiplier=4 \
     ro.keystore.boot_level_key.strategy=TRUSTED_ENVIRONMENT:MAX_USES_PER_BOOT
 
-# OPUS bring-up: audio HAL was BUILT but never installed (not in PRODUCT_PACKAGES) -> /vendor/bin/hw/audiohalservice.qti
-# missing -> audioserver AudioFlinger::onFirstRef() null-derefs -> SoundTrigger ExternalCaptureStateTracker
-# connect() LOG_ALWAYS_FATAL -> system_server crash loop. Install the core (+effect) audio HAL (soong pulls deps+VINTF).
-PRODUCT_PACKAGES += audiohalservice.qti
+# audiohalservice.qti loads every interface below with dlopen(), so Soong cannot
+# infer them from normal shared-library dependencies. Keep the XML contract
+# explicit here: a missing mandatory library makes the service exit at boot.
+PRODUCT_PACKAGES += \
+    audiohalservice.qti \
+    libagmipcservice \
+    libpalipcservice \
+    libpaleventnotifier \
+    libaudiocorehal.qti \
+    libaudiocorehal.default \
+    liblistensoundmodelaidl \
+    libaudioeffecthal.qti \
+    libsoundtriggerhal.qti \
+    android.hardware.bluetooth.audio_sw \
+    libqasr
 
 DEVICE_PACKAGE_OVERLAYS += device/nothing/metroid/overlay
 
