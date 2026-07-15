@@ -6,6 +6,11 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota.mk)
 # Generic ramdisk - build init_boot from source (userdebug/permissive), per onyx
 $(call inherit-product, $(SRC_TARGET_DIR)/product/generic_ramdisk.mk)
 
+# Qualcomm remote-file-system links. The modem TFTP service resolves MPSS
+# read/write state and firmware through /vendor/rfs; without these installed
+# symlinks DMS fails RF software initialization before Android can power radio.
+$(call inherit-product, hardware/qcom-caf/common/common.mk)
+
 # Bring-up (2026-06-30): neutralize A16 keystore2 module-attestation boot-block (non-SELinux
 # post-system_server crash suspect) + force early adb for live observability.
 PRODUCT_PRODUCT_PROPERTIES += \
