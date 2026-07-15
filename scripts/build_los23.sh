@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOP="${ANDROID_BUILD_TOP:-$(cd "$SCRIPT_DIR/../../../.." && pwd)}"
-LUNCH_TARGET="${METROID_LUNCH_TARGET:-lineage_metroid-bp2a-userdebug}"
+LUNCH_TARGET="${METROID_LUNCH_TARGET:-lineage_phone_md_metroid-bp2a-userdebug}"
 JOBS="${METROID_JOBS:-$(nproc)}"
 
 cd "$TOP"
