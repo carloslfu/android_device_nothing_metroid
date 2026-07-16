@@ -216,9 +216,12 @@ PRODUCT_PRECOMPILED_SEPOLICY := false
 # ro.hw_timeout_multiplier=4 -> framework Watchdog 60s*4=240s to survive the slow imageless first boot
 # (odsign fails -> no boot.art -> imageless -> system_server main thread >60s -> Watchdog kill loop).
 # boot_level_key.strategy: TEE keymint rejects EARLY_BOOT_ONLY (odsign Status(-8)); use MAX_USES_PER_BOOT.
+# Match Nothing B4.1's shipping dual-SIM default. Mode 26 is
+# NR_LTE_GSM_WCDMA; omitting it silently seeds new data as 2G/3G-only.
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.hw_timeout_multiplier=4 \
-    ro.keystore.boot_level_key.strategy=TRUSTED_ENVIRONMENT:MAX_USES_PER_BOOT
+    ro.keystore.boot_level_key.strategy=TRUSTED_ENVIRONMENT:MAX_USES_PER_BOOT \
+    ro.telephony.default_network=26,26
 
 # These paths are mount targets for the firmware partitions. EROFS drops empty
 # directories, so keep a harmless symlink in each path until init mounts over it.
