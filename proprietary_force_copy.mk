@@ -1,9 +1,11 @@
 # Generated makefile to force copy missing proprietary blobs
 
 # B4.1's ImsService is the framework endpoint for the Qualcomm IMS HALs that
-# run on metroid. The APK stays presigned; the current source-built support jar
-# supplies its public uses-library contract.
+# run on metroid. QtiTelephonyService forwards the modem call-state and VSID
+# values that start the PAL voice-call stream. The IMS APK stays presigned;
+# QtiTelephonyService is signed with this ROM's platform key.
 PRODUCT_PACKAGES += \
+    QtiTelephonyService \
     ims \
     ims-ext-common \
     ims_ext_common.xml \
