@@ -2,15 +2,19 @@
 
 # B4.1's ImsService is the framework endpoint for the Qualcomm IMS HALs that
 # run on metroid. QtiTelephonyService forwards the modem call-state and VSID
-# values that start the PAL voice-call stream. The IMS APK stays presigned;
-# QtiTelephonyService is signed with this ROM's platform key.
+# values that start the PAL voice-call stream. QtiTelephony and
+# qcrilmsgtunnel carry the Android-to-modem readiness path that enables SMS
+# delivery after SIM and carrier config loading. The IMS APK stays presigned;
+# all three QTI phone-process APKs are signed with this ROM's platform key.
 PRODUCT_PACKAGES += \
+    QtiTelephony \
     QtiTelephonyService \
     ims \
     ims-ext-common \
     ims_ext_common.xml \
     metroid_ims_libimscamera_jni_symlink \
-    metroid_ims_libimsmedia_jni_symlink
+    metroid_ims_libimsmedia_jni_symlink \
+    qcrilmsgtunnel
 
 PRODUCT_COPY_FILES += \
     vendor/nothing/metroid/proprietary/system_ext/etc/permissions/extphonelib.xml:$(TARGET_COPY_OUT_SYSTEM_EXT)/etc/permissions/extphonelib.xml \
