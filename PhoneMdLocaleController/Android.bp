@@ -1,0 +1,8 @@
+android_app {
+    name: "PhoneMdLocaleController",
+    srcs: ["src/**/*.java"],
+    manifest: "AndroidManifest.xml",
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+}

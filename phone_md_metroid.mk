@@ -18,7 +18,9 @@ PRODUCT_MODEL := Phone (3)
 # the agent builds it through edit_phone_md as the conversation progresses.
 # PhoneMdLauncher's module overrides remove LineageSetupWizard and Provision;
 # PRODUCT_PACKAGES subtraction cannot remove an inherited product package.
-PRODUCT_PACKAGES += PhoneMdLauncher
+PRODUCT_PACKAGES += \
+    PhoneMdLauncher \
+    PhoneMdLocaleController
 
 # The ROM, not an onboarding wizard, owns the ordinary runtime grants needed by
 # its only HOME and voice agent. Platform/signature authorities stay ungranted
