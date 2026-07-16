@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <privapp-permissions package="md.phone.localecontroller">
+        <permission name="android.permission.CHANGE_CONFIGURATION" />
+    </privapp-permissions>
+</permissions>
