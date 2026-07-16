@@ -32,6 +32,7 @@ public final class LocaleControllerService extends Service {
     private static final String DESCRIPTOR = "md.phone.localecontroller.ILocaleController";
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final int TRANSACTION_SET_LANGUAGE = IBinder.FIRST_CALL_TRANSACTION;
+    private static final int TRANSACTION_GET_LANGUAGE = IBinder.FIRST_CALL_TRANSACTION + 1;
     private static final Set<String> SUPPORTED_TAGS = Set.of("en-US", "es-CO");
 
     private final Binder mBinder = new Binder() {
@@ -40,6 +41,14 @@ public final class LocaleControllerService extends Service {
                 throws RemoteException {
             if (code == INTERFACE_TRANSACTION) {
                 reply.writeString(DESCRIPTOR);
+                return true;
+            }
+            if (code == TRANSACTION_GET_LANGUAGE) {
+                data.enforceInterface(DESCRIPTOR);
+                data.enforceNoDataAvail();
+                final String languageTag = getLanguageForCaller();
+                reply.writeNoException();
+                reply.writeString(languageTag);
                 return true;
             }
             if (code != TRANSACTION_SET_LANGUAGE) {
@@ -59,6 +68,30 @@ public final class LocaleControllerService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return mBinder;
+    }
+
+    private String getLanguageForCaller() {
+        final int callingUid = Binder.getCallingUid();
+        if (!isCurrentSystemHome(callingUid)) {
+            Slog.w(TAG, "Rejected locale read from non-HOME uid " + callingUid);
+            return null;
+        }
+
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            final Configuration checked = ActivityManager.getService().getConfiguration();
+            final Locale active = checked.getLocales().isEmpty()
+                    ? null : checked.getLocales().get(0);
+            if (active == null || !SUPPORTED_TAGS.contains(active.toLanguageTag())) {
+                return null;
+            }
+            return active.toLanguageTag();
+        } catch (RemoteException error) {
+            Slog.e(TAG, "Could not read the active locale", error);
+            return null;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     private boolean setLanguageForCaller(String languageTag) {

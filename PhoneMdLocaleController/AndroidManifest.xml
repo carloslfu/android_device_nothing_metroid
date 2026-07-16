@@ -3,6 +3,8 @@
     package="md.phone.localecontroller">
 
     <uses-permission android:name="android.permission.CHANGE_CONFIGURATION" />
+    <!-- LocalePicker.updateLocales reaches ActivityManagerService, which also
+         enforces WRITE_SETTINGS on the calling broker UID. -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
     <application
