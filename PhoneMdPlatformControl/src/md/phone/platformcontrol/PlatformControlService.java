@@ -14,6 +14,8 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
+import android.graphics.Region;
 import android.hardware.input.InputManager;
 import android.os.Binder;
 import android.os.Bundle;
@@ -31,6 +33,7 @@ import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewTreeObserver;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
 import android.widget.Button;
@@ -53,6 +56,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Holds only the platform authority needed for visual phone control.
@@ -222,7 +226,15 @@ public final class PlatformControlService extends Service {
 
             final long identity = Binder.clearCallingIdentity();
             try {
-                final boolean applied = executeChecked(action, request);
+                final String overlayOperation = setOverlayInputPassthrough(true, null);
+                final boolean applied;
+                try {
+                    applied = executeChecked(action, request);
+                } finally {
+                    if (overlayOperation != null) {
+                        setOverlayInputPassthrough(false, overlayOperation);
+                    }
+                }
                 if (applied) SystemClock.sleep(160);
                 final String after = foregroundPackage();
                 if (after == null) {
@@ -730,6 +742,8 @@ public final class PlatformControlService extends Service {
                 panel.addView(copy, new LinearLayout.LayoutParams(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
+                final ArrayList<View> progressTouchTargets = new ArrayList<>();
+
                 if (confirmation) {
                     Button deny = new Button(this);
                     deny.setText(denyLabel);
@@ -759,6 +773,23 @@ public final class PlatformControlService extends Service {
                     });
                     panel.addView(stop, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
+                    progressTouchTargets.add(stop);
+                }
+
+                if (!confirmation) {
+                    // The progress banner is visible to the person but omitted from
+                    // computer-use captures. Only Stop owns touch; the rest of the
+                    // banner must pass both human and injected input to the app below.
+                    panel.getViewTreeObserver().addOnComputeInternalInsetsListener(info -> {
+                        info.setTouchableInsets(
+                                ViewTreeObserver.InternalInsetsInfo.TOUCHABLE_INSETS_REGION);
+                        info.touchableRegion.setEmpty();
+                        Rect bounds = new Rect();
+                        for (View target : progressTouchTargets) {
+                            target.getHitRect(bounds);
+                            info.touchableRegion.op(bounds, Region.Op.UNION);
+                        }
+                    });
                 }
 
                 WindowManager.LayoutParams params = new WindowManager.LayoutParams(
@@ -793,6 +824,54 @@ public final class PlatformControlService extends Service {
             Slog.w(TAG, "Control callback died", error);
         }
         hideOverlay(operationId);
+    }
+
+    /**
+     * Makes an active task banner transparent to one injected action. Even the
+     * Stop button must not become the target of model-generated coordinates;
+     * the input mode is restored immediately after Android finishes the action.
+     */
+    private String setOverlayInputPassthrough(boolean passthrough,
+            String expectedOperationId) {
+        AtomicReference<String> affectedOperation = new AtomicReference<>();
+        CountDownLatch finished = new CountDownLatch(1);
+        Runnable task = () -> {
+            try {
+                synchronized (mOverlayLock) {
+                    if (mOverlay == null) return;
+                    if (expectedOperationId != null
+                            && !expectedOperationId.equals(mOverlayOperationId)) return;
+                    WindowManager.LayoutParams params =
+                            (WindowManager.LayoutParams) mOverlay.getLayoutParams();
+                    if (passthrough) {
+                        params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    } else {
+                        params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    }
+                    mWindowManager.updateViewLayout(mOverlay, params);
+                    affectedOperation.set(mOverlayOperationId);
+                }
+            } catch (Throwable error) {
+                Slog.e(TAG, "Could not change control overlay input mode", error);
+            } finally {
+                finished.countDown();
+            }
+        };
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            task.run();
+        } else if (!mMainHandler.post(task)) {
+            return null;
+        }
+        try {
+            if (!finished.await(2, TimeUnit.SECONDS)) {
+                Slog.e(TAG, "Timed out changing control overlay input mode");
+                return null;
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        return affectedOperation.get();
     }
 
     private void hideOverlay(String operationId) {
