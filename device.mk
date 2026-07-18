@@ -186,10 +186,13 @@ PRODUCT_PACKAGES += \
     qms-saidl.metroid.xml \
     qti_radio_extensions.metroid.xml
 
-# IPACM links these source-built libraries at process start. Transitive module
-# dependencies built them in staging but did not place them in the frozen
-# vendor image, leaving IPACM in a linker restart loop.
+# Own the complete IPACM runtime. Its source module is not pulled into the
+# product merely because the proprietary diagnostic companion is present.
+# IPACM also links these two source-built libraries at process start; keeping
+# all three explicit prevents clean-build staging from hiding a missing vendor
+# install and the resulting data-path restart loop.
 PRODUCT_PACKAGES += \
+    ipacm \
     libipanat \
     liboffloadhal
 
