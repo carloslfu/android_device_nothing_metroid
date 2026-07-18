@@ -202,6 +202,8 @@ PRODUCT_PACKAGES += \
 # install and the resulting data-path restart loop.
 PRODUCT_PACKAGES += \
     ipacm \
+    IPACM_cfg.xml \
+    IPACM_Filter_cfg.xml \
     libipanat \
     liboffloadhal
 
