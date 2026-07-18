@@ -73,10 +73,6 @@ VENDOR_HAL_NFC_DATA_DIR_ALLOW = (
     'remove_name search)))'
 )
 
-VENDOR_NFC_DATA_DIR_SEARCH_ALLOW = (
-    '(allow nfc vendor_nfc_vendor_data_file (dir (search)))'
-)
-
 CND_SERVICE_DECLARATION = '\n'.join([
     'service vendor.cnd /system/vendor/bin/cnd',
     '    class main',
@@ -170,14 +166,8 @@ blob_fixups: blob_fixups_user_type = {
             re.escape(VENDOR_QMIPRIOD_TRANSITION),
             VENDOR_QMIPRIOD_TRANSITION + '\n' + VENDOR_QMIPRIOD_DATA_ALLOW,
         )
-        # The NFC app searches the HAL's vendor data directory during normal
-        # startup. The device source rule is not part of the installed stock
-        # vendor CIL, so carry the same narrow permission in the active policy.
-        .regex_replace(
-            re.escape(VENDOR_HAL_NFC_DATA_DIR_ALLOW),
-            VENDOR_HAL_NFC_DATA_DIR_ALLOW + '\n' +
-            VENDOR_NFC_DATA_DIR_SEARCH_ALLOW,
-        ),
+        # The NFC app's directory-search access is owned by the current device
+        # policy. Do not inject a second copy into the extracted stock CIL.
 }  # fmt: skip
 
 module = ExtractUtilsModule(
