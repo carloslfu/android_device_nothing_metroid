@@ -116,7 +116,10 @@ PRODUCT_PACKAGES +=     wpa_supplicant     wpa_cli \
                         android.hardware.wifi.hostapd-V2-ndk \
                         android.hardware.wifi-service.metroid \
                         libwifi-hal-qcom.metroid \
-                        libwifi-hal-ctrl.metroid
+                        libwifi-hal-ctrl.metroid \
+                        firmware_wlanmdsp.otaupdate_symlink \
+                        firmware_wlan_mac.bin_symlink \
+                        firmware_WCNSS_qcom_cfg.ini_symlink
 # Display HALs from source (b20): ~23s reset fix. Module names mirror onyx un_dt device.mk
 # (same SoC sun/sm8750); composer-service added (essential, buildable in sm8750/display tree).
 # Several stock camera/display blobs still link both allocator AIDL V1 and V2.
