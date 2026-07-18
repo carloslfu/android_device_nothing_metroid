@@ -50,6 +50,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Holds only the platform authority needed for visual phone control.
@@ -65,7 +68,7 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 1;
+    private static final int PROTOCOL_VERSION = 2;
     private static final int MAX_TEXT_LENGTH = 20_000;
     private static final int MAX_PATH_POINTS = 128;
 
@@ -84,6 +87,7 @@ public final class PlatformControlService extends Service {
     private View mOverlay;
     private String mOverlayOperationId;
     private IPhoneMdControlCallback mOverlayCallback;
+    private IBinder.DeathRecipient mOverlayDeathRecipient;
 
     private final IPhoneMdControl.Stub mBinder = new IPhoneMdControl.Stub() {
         @Override
@@ -257,20 +261,38 @@ public final class PlatformControlService extends Service {
         }
 
         @Override
-        public void showTask(Bundle state, IPhoneMdControlCallback callback) {
+        public boolean showTask(Bundle state, IPhoneMdControlCallback callback) {
             enforceTrustedCaller();
-            if (state == null || callback == null) return;
+            if (state == null || callback == null) return false;
             final String operationId = state.getString("operation_id");
-            if (!validRequestId(operationId)) return;
+            if (!validRequestId(operationId)) return false;
             final String title = bounded(state.getString("title"), 120, "Phone is working");
             final String detail = bounded(state.getString("detail"), 240, "");
             final String stopLabel = bounded(state.getString("stop_label"), 40, "Stop");
             final boolean confirmation = state.getBoolean("confirmation", false);
             final String approveLabel = bounded(state.getString("approve_label"), 40, "Allow");
             final String denyLabel = bounded(state.getString("deny_label"), 40, "Cancel");
-            mMainHandler.post(() -> showOverlay(
-                    operationId, title, detail, stopLabel, confirmation,
-                    approveLabel, denyLabel, callback));
+            final AtomicBoolean shown = new AtomicBoolean(false);
+            final CountDownLatch finished = new CountDownLatch(1);
+            final Runnable task = () -> {
+                try {
+                    shown.set(showOverlay(operationId, title, detail, stopLabel, confirmation,
+                            approveLabel, denyLabel, callback));
+                } finally {
+                    finished.countDown();
+                }
+            };
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                task.run();
+            } else if (!mMainHandler.post(task)) {
+                return false;
+            }
+            try {
+                return finished.await(2, TimeUnit.SECONDS) && shown.get();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
 
         @Override
@@ -581,6 +603,7 @@ public final class PlatformControlService extends Service {
         }
         try {
             ApplicationInfo app = getPackageManager().getApplicationInfo(packageName, 0);
+            if (app.category == ApplicationInfo.CATEGORY_FINANCE) return true;
             String label = String.valueOf(getPackageManager().getApplicationLabel(app));
             String normalizedLabel = normalize(label);
             for (String token : FINANCIAL_LABEL_TOKENS) {
@@ -591,78 +614,95 @@ public final class PlatformControlService extends Service {
         return false;
     }
 
-    private void showOverlay(String operationId, String title, String detail, String stopLabel,
+    private boolean showOverlay(String operationId, String title, String detail, String stopLabel,
             boolean confirmation, String approveLabel, String denyLabel,
             IPhoneMdControlCallback callback) {
         synchronized (mOverlayLock) {
             hideOverlayLocked(null);
-            LinearLayout panel = new LinearLayout(this);
-            panel.setOrientation(LinearLayout.HORIZONTAL);
-            panel.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            panel.setPadding(dp(16), dp(8), dp(10), dp(8));
-            panel.setBackgroundColor(Color.argb(242, 18, 18, 18));
-
-            LinearLayout copy = new LinearLayout(this);
-            copy.setOrientation(LinearLayout.VERTICAL);
-            TextView heading = new TextView(this);
-            heading.setText(title);
-            heading.setTextColor(Color.WHITE);
-            heading.setTextSize(15);
-            heading.setTypeface(null, android.graphics.Typeface.BOLD);
-            TextView status = new TextView(this);
-            status.setText(detail);
-            status.setTextColor(Color.rgb(210, 210, 210));
-            status.setTextSize(12);
-            copy.addView(heading);
-            if (!detail.isEmpty()) copy.addView(status);
-            panel.addView(copy, new LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-            if (confirmation) {
-                Button deny = new Button(this);
-                deny.setText(denyLabel);
-                deny.setAllCaps(false);
-                deny.setOnClickListener(view -> deliverConfirmation(
-                        callback, operationId, false));
-                panel.addView(deny, new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
-                Button approve = new Button(this);
-                approve.setText(approveLabel);
-                approve.setAllCaps(false);
-                approve.setOnClickListener(view -> deliverConfirmation(
-                        callback, operationId, true));
-                panel.addView(approve, new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
-            } else {
-                Button stop = new Button(this);
-                stop.setText(stopLabel);
-                stop.setAllCaps(false);
-                stop.setOnClickListener(view -> {
-                    try {
-                        callback.onCancelRequested(operationId);
-                    } catch (RemoteException error) {
-                        Slog.w(TAG, "Control callback died", error);
-                    }
-                    hideOverlay(operationId);
-                });
-                panel.addView(stop, new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
+            final IBinder callbackBinder = callback.asBinder();
+            final IBinder.DeathRecipient deathRecipient =
+                    () -> mMainHandler.post(() -> hideOverlay(operationId));
+            try {
+                callbackBinder.linkToDeath(deathRecipient, 0);
+            } catch (RemoteException error) {
+                Slog.w(TAG, "Control callback died before overlay display", error);
+                return false;
             }
+            try {
+                LinearLayout panel = new LinearLayout(this);
+                panel.setOrientation(LinearLayout.HORIZONTAL);
+                panel.setGravity(android.view.Gravity.CENTER_VERTICAL);
+                panel.setPadding(dp(16), dp(8), dp(10), dp(8));
+                panel.setBackgroundColor(Color.argb(242, 18, 18, 18));
 
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.WRAP_CONTENT,
-                    WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                    PixelFormat.TRANSLUCENT);
-            params.gravity = android.view.Gravity.TOP;
-            params.setTitle("phone.md co-pilot");
-            mWindowManager.addView(panel, params);
-            mOverlay = panel;
-            mOverlayOperationId = operationId;
-            mOverlayCallback = callback;
+                LinearLayout copy = new LinearLayout(this);
+                copy.setOrientation(LinearLayout.VERTICAL);
+                TextView heading = new TextView(this);
+                heading.setText(title);
+                heading.setTextColor(Color.WHITE);
+                heading.setTextSize(15);
+                heading.setTypeface(null, android.graphics.Typeface.BOLD);
+                TextView status = new TextView(this);
+                status.setText(detail);
+                status.setTextColor(Color.rgb(210, 210, 210));
+                status.setTextSize(12);
+                copy.addView(heading);
+                if (!detail.isEmpty()) copy.addView(status);
+                panel.addView(copy, new LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+                if (confirmation) {
+                    Button deny = new Button(this);
+                    deny.setText(denyLabel);
+                    deny.setAllCaps(false);
+                    deny.setOnClickListener(view -> deliverConfirmation(
+                            callback, operationId, false));
+                    panel.addView(deny, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
+                    Button approve = new Button(this);
+                    approve.setText(approveLabel);
+                    approve.setAllCaps(false);
+                    approve.setOnClickListener(view -> deliverConfirmation(
+                            callback, operationId, true));
+                    panel.addView(approve, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
+                } else {
+                    Button stop = new Button(this);
+                    stop.setText(stopLabel);
+                    stop.setAllCaps(false);
+                    stop.setOnClickListener(view -> {
+                        try {
+                            callback.onCancelRequested(operationId);
+                        } catch (RemoteException error) {
+                            Slog.w(TAG, "Control callback died", error);
+                        }
+                        hideOverlay(operationId);
+                    });
+                    panel.addView(stop, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
+                }
+
+                WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.WRAP_CONTENT,
+                        WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT);
+                params.gravity = android.view.Gravity.TOP;
+                params.setTitle("phone.md co-pilot");
+                mWindowManager.addView(panel, params);
+                mOverlay = panel;
+                mOverlayOperationId = operationId;
+                mOverlayCallback = callback;
+                mOverlayDeathRecipient = deathRecipient;
+                return true;
+            } catch (Throwable error) {
+                callbackBinder.unlinkToDeath(deathRecipient, 0);
+                Slog.e(TAG, "Could not display control overlay", error);
+                return false;
+            }
         }
     }
 
@@ -690,9 +730,13 @@ public final class PlatformControlService extends Service {
         } catch (Throwable error) {
             Slog.w(TAG, "Could not remove control overlay", error);
         }
+        if (mOverlayCallback != null && mOverlayDeathRecipient != null) {
+            mOverlayCallback.asBinder().unlinkToDeath(mOverlayDeathRecipient, 0);
+        }
         mOverlay = null;
         mOverlayOperationId = null;
         mOverlayCallback = null;
+        mOverlayDeathRecipient = null;
     }
 
     private int dp(int value) {
