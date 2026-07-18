@@ -603,7 +603,6 @@ public final class PlatformControlService extends Service {
         }
         try {
             ApplicationInfo app = getPackageManager().getApplicationInfo(packageName, 0);
-            if (app.category == ApplicationInfo.CATEGORY_FINANCE) return true;
             String label = String.valueOf(getPackageManager().getApplicationLabel(app));
             String normalizedLabel = normalize(label);
             for (String token : FINANCIAL_LABEL_TOKENS) {
@@ -799,12 +798,16 @@ public final class PlatformControlService extends Service {
             "bank", "banco", "banca", "bancolombia", "nequi", "daviplata", "transfiya",
             "paypal", "venmo", "cashapp", "cash.app", "wallet", "revolut", "wise",
             "wellsfargo", "bankofamerica", "chase.sig", "capitalone", "citibank", "coinbase",
-            "binance", "robinhood", "etrade", "fidelity"
+            "binance", "robinhood", "etrade", "fidelity", "pnc", "navyfederal", "ally",
+            "discover", "chime", "sofi", "amex", "schwab", "vanguard", "zelle", "stripe",
+            "squareup", "mercadopago", "rappipay", "lulo", "com.nu."
     ));
 
     private static final Set<String> FINANCIAL_LABEL_TOKENS = new HashSet<>(Arrays.asList(
             "bank", "banking", "banco", "banca", "bancolombia", "nequi", "daviplata",
             "paypal", "venmo", "cash app", "wallet", "billetera", "revolut", "wise",
-            "coinbase", "binance", "robinhood", "fidelity"
+            "coinbase", "binance", "robinhood", "fidelity", "pnc", "ally", "discover",
+            "chime", "sofi", "american express", "amex", "charles schwab", "vanguard",
+            "navy federal", "zelle", "stripe", "mercado pago", "rappi pay", "lulo", "nu"
     ));
 }
