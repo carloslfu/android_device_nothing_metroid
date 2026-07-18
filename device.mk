@@ -24,6 +24,13 @@ PRODUCT_SYSTEM_PROPERTIES += \
     dalvik.vm.heapminfree=8m \
     dalvik.vm.heapmaxfree=32m
 
+# This is a dedicated development device. Lineage keeps ro.debuggable=0 on
+# userdebug builds, so secure ADB must be selected explicitly instead of
+# depending on the insecure-adb post-processing side effect. Authentication
+# remains enabled by vendor/lineage through ro.adb.secure=1.
+PRODUCT_SYSTEM_DEFAULT_PROPERTIES += \
+    persist.sys.usb.config=adb
+
 # Boot control
 PRODUCT_PACKAGES += \
     update_engine \
