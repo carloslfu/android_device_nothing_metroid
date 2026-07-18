@@ -20,14 +20,16 @@ PRODUCT_MODEL := Phone (3)
 # PRODUCT_PACKAGES subtraction cannot remove an inherited product package.
 PRODUCT_PACKAGES += \
     PhoneMdLauncher \
-    PhoneMdLocaleController
+    PhoneMdLocaleController \
+    PhoneMdPlatformControl
 
 # The ROM, not an onboarding wizard, owns the ordinary runtime grants needed by
 # its only HOME and voice agent. Platform/signature authorities stay ungranted
 # until the enforcing SELinux + secure-adb control-service gate.
 PRODUCT_COPY_FILES += \
     $(LOCAL_PATH)/permissions/phone-md-default-permissions.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/default-permissions/phone-md-default-permissions.xml \
-    $(LOCAL_PATH)/permissions/privapp-permissions-phone-md-locale-controller.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-phone-md-locale-controller.xml
+    $(LOCAL_PATH)/permissions/privapp-permissions-phone-md-locale-controller.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-phone-md-locale-controller.xml \
+    $(LOCAL_PATH)/permissions/privapp-permissions-phone-md-platform-control.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/permissions/privapp-permissions-phone-md-platform-control.xml
 
 # There is no scripted setup wizard in phone.md. Seed SettingsProvider as
 # provisioned on fresh data so SystemUI and HOME start normally while the agent

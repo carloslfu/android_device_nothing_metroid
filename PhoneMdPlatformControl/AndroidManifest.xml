@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="md.phone.platformcontrol">
+
+    <permission
+        android:name="md.phone.permission.PLATFORM_CONTROL"
+        android:label="phone.md platform control"
+        android:protectionLevel="signature|privileged" />
+
+    <uses-permission android:name="android.permission.READ_FRAME_BUFFER" />
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS" />
+    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.SET_CLIP_SOURCE" />
+
+    <application
+        android:allowBackup="false"
+        android:directBootAware="true"
+        android:hasCode="true"
+        android:label="phone.md platform control">
+        <service
+            android:name=".PlatformControlService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="md.phone.permission.PLATFORM_CONTROL" />
+    </application>
+</manifest>

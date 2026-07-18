@@ -111,6 +111,8 @@ QMS_ANDROID16_SERVICE_DECLARATION = '\n'.join([
     '    disabled',
 ])
 
+NTCAP_EARLY_START = '    start vendor.ntcap\n'
+
 blob_fixups: blob_fixups_user_type = {
     # The stock blob imports AHardwareBuffer functions without naming their
     # provider. Make the runtime dependency explicit instead of relying on the
@@ -143,6 +145,10 @@ blob_fixups: blob_fixups_user_type = {
             re.escape(QMS_SERVICE_DECLARATION),
             QMS_ANDROID16_SERVICE_DECLARATION,
         ),
+    # Nothing's stock init file asks for vendor.ntcap, but the service is not
+    # shipped in this product. Do not leave a dead bring-up hook in early-init.
+    'vendor/etc/init/hw/init.qcom.rc': blob_fixup()
+        .regex_replace(re.escape(NTCAP_EARLY_START), ''),
     # Android 16 owns /sys/power/mem_sleep through sysfs_mem_sleep. The stock
     # Android 15 vendor policy labels the same node with a private type, which
     # makes second-stage init's split-policy compile fail. Keep the original

@@ -80,18 +80,6 @@ vintf_fragment {
     vendor: true,
 }
 
-vintf_fragment {
-    name: "android.hardware.drm-service.clearkey.metroid4.xml",
-    src: "android.hardware.drm-service.clearkey.xml",
-    vendor: true,
-}
-
-vintf_fragment {
-    name: "vendor.qti.qspa-service.metroid4.xml",
-    src: "vendor.qti.qspa-service.xml",
-    vendor: true,
-}
-
 // CNE/MWQEM contracts copied from the exact B4.1 vendor image. The matching
 // CNE binary is already shipped and registers both services when declared.
 vintf_fragment {

@@ -1,0 +1,11 @@
+android_app {
+    name: "PhoneMdPlatformControl",
+    srcs: [
+        "src/**/*.aidl",
+        "src/**/*.java",
+    ],
+    manifest: "AndroidManifest.xml",
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+}

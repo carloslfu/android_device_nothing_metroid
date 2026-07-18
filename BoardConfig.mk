@@ -7,9 +7,6 @@ PRODUCT_COPY_FILES := $(filter-out \
     vendor/nothing/metroid/proprietary/vendor/etc/linker.config.pb:%, \
     $(PRODUCT_COPY_FILES))
 
-# Bring-up: dexpreopt off (restores 07-05 23:40 known-good EROFS bring-up config)
-WITH_DEXPREOPT := false
-
 # A/B
 AB_OTA_UPDATER := true
 AB_OTA_PARTITIONS += \
@@ -69,9 +66,6 @@ BOARD_SHIPPING_API_LEVEL := 202404
 # Allow prebuilt ELF .so blobs shipped via PRODUCT_COPY_FILES
 BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
 
-# Allow partition-specific selinux overrides (odm selinux auto-generation collision)
-BUILD_BROKEN_DUP_RULES := true
-
 # Custom OEM Android IDs (vendor_qtr, vendor_qcc, etc.) referenced by vendor init scripts
 TARGET_FS_CONFIG_GEN := device/nothing/metroid/config.fs
 
@@ -84,7 +78,7 @@ BOARD_KERNEL_OFFSET := 0x00008000
 BOARD_RAMDISK_OFFSET := 0x01000000
 BOARD_TAGS_OFFSET := 0x00000100
 BOARD_DTB_OFFSET := 0x01f00000
-BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2 erofs.reserved_pages=64 nosoftlockup log_buf_len=1M ignore_loglevel printk.devkmsg=on androidboot.init_fatal_reboot_target=recovery androidboot.selinux=permissive
+BOARD_KERNEL_CMDLINE := bootopt=64S3,32N2,64N2 erofs.reserved_pages=64 nosoftlockup log_buf_len=1M ignore_loglevel printk.devkmsg=on androidboot.init_fatal_reboot_target=recovery
 BOARD_KERNEL_IMAGE_NAME := Image
 
 # Bootconfig
@@ -95,8 +89,7 @@ BOARD_BOOTCONFIG := \
     androidboot.load_modules_parallel=true \
     androidboot.hypervisor.protected_vm.supported=true \
     androidboot.vendor.qspa=true \
-    androidboot.serialconsole=0 \
-    androidboot.selinux=permissive
+    androidboot.serialconsole=0
 
 # Kernel - prebuilt
 TARGET_KERNEL_VERSION := 6.6

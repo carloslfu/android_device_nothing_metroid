@@ -78,7 +78,7 @@ def main():
         "--header_version", "4",
         "--vendor_boot", new_vendor_boot,
         "--vendor_ramdisk", new_ramdisk_archive,
-        "--vendor_cmdline", "video=vfb:640x400,bpp=32,memsize=3072000 qcom_geni_serial.con_enabled=0 nosoftlockup console=ttynull qcom_geni_serial.con_enabled=0 log_buf_len=1M ignore_loglevel printk.devkmsg=on androidboot.selinux=permissive bootconfig",
+        "--vendor_cmdline", "video=vfb:640x400,bpp=32,memsize=3072000 qcom_geni_serial.con_enabled=0 nosoftlockup console=ttynull qcom_geni_serial.con_enabled=0 log_buf_len=1M ignore_loglevel printk.devkmsg=on bootconfig",
         "--dtb", os.path.join(UNPACK_DIR, "dtb"),
         "--vendor_bootconfig", os.path.join(UNPACK_DIR, "bootconfig"),
         "--pagesize", "4096",
@@ -112,4 +112,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
