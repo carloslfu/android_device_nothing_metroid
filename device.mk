@@ -110,7 +110,12 @@ PRODUCT_PACKAGES +=     wpa_supplicant     wpa_cli \
                         android.hardware.wifi-service.metroid
 # Display HALs from source (b20): ~23s reset fix. Module names mirror onyx un_dt device.mk
 # (same SoC sun/sm8750); composer-service added (essential, buildable in sm8750/display tree).
-PRODUCT_PACKAGES +=     vendor.qti.hardware.display.composer-service     vendor.qti.hardware.display.allocator-service     vendor.qti.hardware.display.demura-service     vendor.qti.hardware.display.snapalloc-impl     android.hardware.graphics.mapper@4.0-impl-qti-display     android.hardware.graphics.composer3-V3-ndk.vendor     vendor.qti.hardware.display.composer3-V1-ndk.vendor     vendor.qti.hardware.display.config-V12-ndk.vendor     vendor.qti.hardware.display.aiqe-V2-ndk.vendor
+# Several stock camera/display blobs still link both allocator AIDL V1 and V2.
+# V2 arrives through the display stack; keep the source-built V1 vendor variant
+# explicit so a dependency hidden behind the narrow prebuilt ELF exception cannot
+# disappear from a clean product build.
+PRODUCT_PACKAGES +=     android.hardware.graphics.allocator-V1-ndk.vendor \
+                        vendor.qti.hardware.display.composer-service     vendor.qti.hardware.display.allocator-service     vendor.qti.hardware.display.demura-service     vendor.qti.hardware.display.snapalloc-impl     android.hardware.graphics.mapper@4.0-impl-qti-display     android.hardware.graphics.composer3-V3-ndk.vendor     vendor.qti.hardware.display.composer3-V1-ndk.vendor     vendor.qti.hardware.display.config-V12-ndk.vendor     vendor.qti.hardware.display.aiqe-V2-ndk.vendor
 
 # Boot control HAL from source (b20): mirror onyx device.mk
 PRODUCT_PACKAGES +=     android.hardware.boot-service.qti     android.hardware.boot-service.qti.recovery \
