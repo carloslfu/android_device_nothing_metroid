@@ -244,6 +244,7 @@ PRODUCT_PACKAGES += \
 # older C++ and AIDL layouts and crash the current core implementation.
 PRODUCT_PACKAGES += \
     audiohalservice.qti \
+    audioadsprpcd \
     libagmipcservice \
     libagm_mixer_plugin \
     libagm_pcm_plugin \
