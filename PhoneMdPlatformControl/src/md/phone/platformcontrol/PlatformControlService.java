@@ -68,9 +68,11 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 2;
+    private static final int PROTOCOL_VERSION = 3;
     private static final int MAX_TEXT_LENGTH = 20_000;
     private static final int MAX_PATH_POINTS = 128;
+    private static final int GESTURE_DURATION_MILLIS = 300;
+    private static final int GESTURE_EVENT_HZ = 120;
 
     private static final String STATUS_OK = "ok";
     private static final String STATUS_INVALID = "invalid";
@@ -411,8 +413,9 @@ public final class PlatformControlService extends Service {
 
     private boolean tap(int x, int y) {
         long down = SystemClock.uptimeMillis();
-        boolean first = injectMotion(MotionEvent.ACTION_DOWN, down, down, x, y);
-        return injectMotion(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(), x, y) && first;
+        boolean first = injectMotion(MotionEvent.ACTION_DOWN, down, down, x, y, 1.0f);
+        return injectMotion(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(),
+                x, y, 0.0f) && first;
     }
 
     private boolean drag(int[] xs, int[] ys) {
@@ -425,15 +428,59 @@ public final class PlatformControlService extends Service {
             requireCoordinate(xs[index], metrics.widthPixels, "x");
             requireCoordinate(ys[index], metrics.heightPixels, "y");
         }
-        long down = SystemClock.uptimeMillis();
-        boolean applied = injectMotion(MotionEvent.ACTION_DOWN, down, down, xs[0], ys[0]);
+
+        double[] distanceAt = new double[xs.length];
         for (int index = 1; index < xs.length; index++) {
-            applied = injectMotion(MotionEvent.ACTION_MOVE, down, SystemClock.uptimeMillis(),
-                    xs[index], ys[index]) && applied;
-            SystemClock.sleep(16);
+            distanceAt[index] = distanceAt[index - 1] + Math.hypot(
+                    xs[index] - xs[index - 1], ys[index] - ys[index - 1]);
+        }
+        final double totalDistance = distanceAt[distanceAt.length - 1];
+        if (totalDistance < 1.0) {
+            throw new IllegalArgumentException("A drag needs distinct points.");
+        }
+
+        long down = SystemClock.uptimeMillis();
+        boolean applied = injectMotion(MotionEvent.ACTION_DOWN, down, down,
+                xs[0], ys[0], 1.0f);
+        final long end = down + GESTURE_DURATION_MILLIS;
+        final float eventPeriodMillis = 1_000.0f / GESTURE_EVENT_HZ;
+        int injected = 1;
+        long now = SystemClock.uptimeMillis();
+        while (now < end) {
+            final long elapsed = now - down;
+            final long wait = (long) Math.floor(injected * eventPeriodMillis - elapsed);
+            if (wait > 0) {
+                SystemClock.sleep(Math.min(wait, end - now));
+            }
+            now = SystemClock.uptimeMillis();
+            if (now >= end) break;
+
+            final float alpha = Math.min(1.0f,
+                    (float) (now - down) / GESTURE_DURATION_MILLIS);
+            final float[] point = interpolatePath(xs, ys, distanceAt, totalDistance, alpha);
+            applied = injectMotion(MotionEvent.ACTION_MOVE, down, now,
+                    point[0], point[1], 1.0f) && applied;
+            injected++;
+            now = SystemClock.uptimeMillis();
         }
         return injectMotion(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(),
-                xs[xs.length - 1], ys[ys.length - 1]) && applied;
+                xs[xs.length - 1], ys[ys.length - 1], 0.0f) && applied;
+    }
+
+    private float[] interpolatePath(int[] xs, int[] ys, double[] distanceAt,
+            double totalDistance, float alpha) {
+        final double target = totalDistance * alpha;
+        int segment = 1;
+        while (segment < distanceAt.length - 1 && distanceAt[segment] < target) {
+            segment++;
+        }
+        final double segmentDistance = distanceAt[segment] - distanceAt[segment - 1];
+        final float segmentAlpha = segmentDistance == 0.0 ? 1.0f
+                : (float) ((target - distanceAt[segment - 1]) / segmentDistance);
+        return new float[]{
+                xs[segment - 1] + (xs[segment] - xs[segment - 1]) * segmentAlpha,
+                ys[segment - 1] + (ys[segment] - ys[segment - 1]) * segmentAlpha,
+        };
     }
 
     private boolean typeText(String text) {
@@ -534,14 +581,47 @@ public final class PlatformControlService extends Service {
         }
     }
 
-    private boolean injectMotion(int action, long downTime, long eventTime, int x, int y) {
-        MotionEvent event = MotionEvent.obtain(downTime, eventTime, action, x, y, 0);
-        event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+    private boolean injectMotion(int action, long downTime, long eventTime,
+            float x, float y, float pressure) {
+        MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
+        properties.id = 0;
+        properties.toolType = MotionEvent.TOOL_TYPE_FINGER;
+        MotionEvent.PointerCoords coordinates = new MotionEvent.PointerCoords();
+        coordinates.x = x;
+        coordinates.y = y;
+        coordinates.pressure = pressure;
+        coordinates.size = 1.0f;
+        MotionEvent event = MotionEvent.obtain(
+                downTime,
+                eventTime,
+                action,
+                1,
+                new MotionEvent.PointerProperties[]{properties},
+                new MotionEvent.PointerCoords[]{coordinates},
+                0,
+                0,
+                1.0f,
+                1.0f,
+                touchscreenDeviceId(),
+                0,
+                InputDevice.SOURCE_TOUCHSCREEN,
+                Display.DEFAULT_DISPLAY,
+                0);
         try {
             return inject(event);
         } finally {
             event.recycle();
         }
+    }
+
+    private int touchscreenDeviceId() {
+        for (int deviceId : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(deviceId);
+            if (device != null && device.supportsSource(InputDevice.SOURCE_TOUCHSCREEN)) {
+                return deviceId;
+            }
+        }
+        return 0;
     }
 
     private boolean injectKeyCode(int keyCode, int metaState) {
