@@ -9,11 +9,17 @@
 PRODUCT_PACKAGES += \
     QtiTelephony \
     QtiTelephonyService \
+    extphonelib \
+    extphonelib.xml \
     ims \
     ims-ext-common \
     ims_ext_common.xml \
     metroid_ims_libimscamera_jni_symlink \
     metroid_ims_libimsmedia_jni_symlink \
+    qti-telephony-hidl-wrapper \
+    qti-telephony-utils \
+    qti_telephony_hidl_wrapper.xml \
+    qti_telephony_utils.xml \
     qcrilmsgtunnel
 
 PRODUCT_COPY_FILES += \
