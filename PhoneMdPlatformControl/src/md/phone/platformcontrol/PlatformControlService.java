@@ -72,7 +72,7 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 3;
+    private static final int PROTOCOL_VERSION = 4;
     private static final int MAX_TEXT_LENGTH = 20_000;
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
@@ -226,10 +226,13 @@ public final class PlatformControlService extends Service {
 
             final long identity = Binder.clearCallingIdentity();
             try {
+                final boolean overlayWasActive = hasOverlay();
                 final String overlayOperation = setOverlayInputPassthrough(true, null);
                 final boolean applied;
                 try {
-                    applied = executeChecked(action, request);
+                    applied = !overlayWasActive || overlayOperation != null
+                            ? executeChecked(action, request)
+                            : false;
                 } finally {
                     if (overlayOperation != null) {
                         setOverlayInputPassthrough(false, overlayOperation);
@@ -871,7 +874,24 @@ public final class PlatformControlService extends Service {
             Thread.currentThread().interrupt();
             return null;
         }
-        return affectedOperation.get();
+        final String operationId = affectedOperation.get();
+        if (operationId == null) return null;
+        try {
+            // updateViewLayout returns before InputDispatcher necessarily sees the
+            // new window flags. Force that transaction through before injecting;
+            // otherwise a top-edge tap can still be rejected as obscured input.
+            WindowManagerGlobal.getWindowManagerService().syncInputTransactions(false);
+        } catch (Throwable error) {
+            Slog.e(TAG, "Could not synchronize control overlay input mode", error);
+            return null;
+        }
+        return operationId;
+    }
+
+    private boolean hasOverlay() {
+        synchronized (mOverlayLock) {
+            return mOverlay != null;
+        }
     }
 
     private void hideOverlay(String operationId) {
