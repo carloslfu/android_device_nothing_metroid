@@ -118,3 +118,12 @@ vintf_fragment {
     src: "qti_radio_extensions.metroid.xml",
     vendor: true,
 }
+
+// audiohalservice.qti already loads and serves Qualcomm's SoundTrigger3
+// implementation. Without this contract servicemanager rejects registration
+// and Android falls back to its fake injection-only module.
+vintf_fragment {
+    name: "soundtrigger3.metroid.xml",
+    src: "soundtrigger3.metroid.xml",
+    vendor: true,
+}

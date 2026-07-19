@@ -182,7 +182,12 @@ PRODUCT_COPY_FILES += \
 # mapper.qti.xml dropped 2026-07-10: qcom-caf gralloc source (mapper.qti) now provides the
 # same fragment -> fsgen packaging conflict; the standalone-fragment fix was proven ineffective
 # anyway (see metroid-mapper-vintf-fix-attempt-20260706).
-PRODUCT_PACKAGES += hal_batch1.metroid.xml hal_batch2.metroid.xml hal_batch3.metroid.xml camera_provider.metroid.xml
+PRODUCT_PACKAGES += \
+    hal_batch1.metroid.xml \
+    hal_batch2.metroid.xml \
+    hal_batch3.metroid.xml \
+    camera_provider.metroid.xml \
+    soundtrigger3.metroid.xml
 # batch 4 (2026-07-10, live-verified): radio HAL declarations. The source
 # ClearKey and QSPA services each own their fragment; metroid must not install
 # second copies at those paths.
