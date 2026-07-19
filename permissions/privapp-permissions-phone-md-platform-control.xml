@@ -3,5 +3,7 @@
     <privapp-permissions package="md.phone.launcher">
         <permission name="md.phone.permission.PLATFORM_CONTROL" />
         <permission name="android.permission.CAPTURE_AUDIO_HOTWORD" />
+        <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+        <permission name="android.permission.CONTROL_INCALL_EXPERIENCE" />
     </privapp-permissions>
 </permissions>
