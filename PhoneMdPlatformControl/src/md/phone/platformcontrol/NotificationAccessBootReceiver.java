@@ -38,9 +38,7 @@ public final class NotificationAccessBootReceiver extends BroadcastReceiver {
         try {
             notifications.setNotificationListenerAccessGranted(
                     PHONE_MD_LISTENER, true, false /* userSet */);
-            boolean granted = notifications.isNotificationListenerAccessGranted(
-                    PHONE_MD_LISTENER);
-            Slog.i(TAG, "phone.md notification access after " + action + ": " + granted);
+            Slog.i(TAG, "Reconciled phone.md notification access after " + action);
         } catch (RuntimeException error) {
             Slog.e(TAG, "Could not reconcile phone.md notification access after " + action,
                     error);
