@@ -21,6 +21,9 @@ android_app_import {
         "AudioFX",
         "Launcher3",
         "Launcher3QuickStep",
+        // phone.md is the default dialer and renders Telecom calls itself.
+        // Keeping Lineage Dialer would create two competing call screens.
+        "Dialer",
         "LineageSetupWizard",
         "Provision",
     ],
