@@ -9,6 +9,7 @@ interface IPhoneMdControl {
     Bundle getCapabilities();
     Bundle captureDisplay(String requestId);
     Bundle execute(in Bundle request);
+    Bundle performSystemOperation(in Bundle request);
     boolean showTask(in Bundle state, IPhoneMdControlCallback callback);
     void hideTask(String operationId);
 }
