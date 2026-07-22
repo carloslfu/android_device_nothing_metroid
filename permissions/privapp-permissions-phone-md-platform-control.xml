@@ -6,4 +6,12 @@
         <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
         <permission name="android.permission.CONTROL_INCALL_EXPERIENCE" />
     </privapp-permissions>
+    <privapp-permissions package="md.phone.platformcontrol">
+        <permission name="android.permission.INSTALL_PACKAGES" />
+        <permission name="android.permission.DELETE_PACKAGES" />
+        <permission name="android.permission.REBOOT" />
+        <permission name="android.permission.TETHER_PRIVILEGED" />
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.BLUETOOTH_PRIVILEGED" />
+    </privapp-permissions>
 </permissions>
