@@ -17,9 +17,13 @@
         <permission name="android.permission.WRITE_CALENDAR" fixed="false" />
         <permission name="android.permission.POST_NOTIFICATIONS" fixed="false" />
         <permission name="android.permission.CAMERA" fixed="false" />
+        <permission name="android.permission.READ_MEDIA_IMAGES" fixed="false" />
+        <permission name="android.permission.READ_MEDIA_VIDEO" fixed="false" />
+        <permission name="android.permission.READ_MEDIA_AUDIO" fixed="false" />
         <permission name="android.permission.ACCESS_COARSE_LOCATION" fixed="false" />
         <permission name="android.permission.ACCESS_FINE_LOCATION" fixed="false" />
         <permission name="android.permission.BLUETOOTH_CONNECT" fixed="false" />
         <permission name="android.permission.BLUETOOTH_SCAN" fixed="false" />
+        <permission name="android.permission.NEARBY_WIFI_DEVICES" fixed="false" />
     </exception>
 </exceptions>
