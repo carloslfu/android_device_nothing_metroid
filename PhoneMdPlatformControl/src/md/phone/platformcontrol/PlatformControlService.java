@@ -77,6 +77,11 @@ public final class PlatformControlService extends Service {
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
+    // A non-touchable overlay above Android's maximum obscuring opacity still
+    // makes InputDispatcher reject injected touches beneath it as untrusted.
+    // Stay below the 0.80 platform threshold instead of relying on WindowManager
+    // to clamp the visual surface after its input window has been published.
+    private static final float PROGRESS_OVERLAY_WINDOW_ALPHA = 0.79f;
 
     private static final String STATUS_OK = "ok";
     private static final String STATUS_INVALID = "invalid";
@@ -805,6 +810,9 @@ public final class PlatformControlService extends Service {
                         PixelFormat.TRANSLUCENT);
                 params.gravity = android.view.Gravity.TOP;
                 params.setTitle("phone.md co-pilot");
+                if (!confirmation) {
+                    params.alpha = PROGRESS_OVERLAY_WINDOW_ALPHA;
+                }
                 mWindowManager.addView(panel, params);
                 mOverlay = panel;
                 mOverlayOperationId = operationId;
