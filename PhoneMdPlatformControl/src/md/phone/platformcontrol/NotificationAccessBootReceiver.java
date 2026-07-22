@@ -34,6 +34,8 @@ public final class NotificationAccessBootReceiver extends BroadcastReceiver {
             | PackageManager.FLAG_PERMISSION_USER_FIXED
             | PackageManager.FLAG_PERMISSION_POLICY_FIXED
             | PackageManager.FLAG_PERMISSION_SYSTEM_FIXED;
+    private static final int MATCH_ALL_BOOT_STATES = PackageManager.MATCH_DIRECT_BOOT_AWARE
+            | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
     private static final String[] PHONE_MD_RUNTIME_PERMISSIONS = {
             "android.permission.RECORD_AUDIO",
             "android.permission.CALL_PHONE",
@@ -120,13 +122,15 @@ public final class NotificationAccessBootReceiver extends BroadcastReceiver {
     private static boolean isTrustedPhoneMdHome(Context context, int userId) {
         PackageManager packageManager = context.getPackageManager();
         try {
-            ApplicationInfo launcher = packageManager.getApplicationInfo(PHONE_MD_PACKAGE, 0);
+            ApplicationInfo launcher = packageManager.getApplicationInfo(
+                    PHONE_MD_PACKAGE, MATCH_ALL_BOOT_STATES);
             if ((launcher.flags & ApplicationInfo.FLAG_SYSTEM) == 0
                     || (launcher.privateFlags & ApplicationInfo.PRIVATE_FLAG_PRIVILEGED) == 0) {
                 return false;
             }
             PackageInfo packageInfo = packageManager.getPackageInfo(
-                    PHONE_MD_PACKAGE, PackageManager.GET_SIGNING_CERTIFICATES);
+                    PHONE_MD_PACKAGE,
+                    PackageManager.GET_SIGNING_CERTIFICATES | MATCH_ALL_BOOT_STATES);
             if (packageInfo.signingInfo == null
                     || packageInfo.signingInfo.getApkContentsSigners().length != 1
                     || !PHONE_MD_CERT_SHA256.equals(hex(MessageDigest.getInstance("SHA-256")
@@ -136,7 +140,7 @@ public final class NotificationAccessBootReceiver extends BroadcastReceiver {
 
             Intent homeIntent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
             ResolveInfo home = packageManager.resolveActivityAsUser(
-                    homeIntent, PackageManager.MATCH_DEFAULT_ONLY, userId);
+                    homeIntent, PackageManager.MATCH_DEFAULT_ONLY | MATCH_ALL_BOOT_STATES, userId);
             return home != null && home.activityInfo != null
                     && PHONE_MD_PACKAGE.equals(home.activityInfo.packageName);
         } catch (Throwable error) {
