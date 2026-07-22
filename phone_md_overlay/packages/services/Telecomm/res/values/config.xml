@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Telecom combines config_defaultDialer with this class to construct the
+         system InCallService component. Both halves must name phone.md. -->
+    <string name="incall_default_class" translatable="false">md.phone.launcher.call.PhoneMdInCallService</string>
+</resources>
