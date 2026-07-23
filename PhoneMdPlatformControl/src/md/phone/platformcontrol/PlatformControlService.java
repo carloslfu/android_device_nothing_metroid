@@ -78,6 +78,11 @@ public final class PlatformControlService extends Service {
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
     private static final long OVERLAY_MAX_LIFETIME_MILLIS = 120_000;
+    // WAIT_FOR_FINISH proves that InputDispatcher handled the generated event,
+    // but the target View callback can still arrive after the input window is
+    // made touchable again. Keep Stop inert across that handoff so a generated
+    // top-edge tap can never cancel its own operation.
+    private static final long GENERATED_INPUT_STOP_GUARD_MILLIS = 300;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
     // Stay below the 0.80 platform threshold instead of relying on WindowManager
@@ -101,6 +106,8 @@ public final class PlatformControlService extends Service {
     private IPhoneMdControlCallback mOverlayCallback;
     private IBinder.DeathRecipient mOverlayDeathRecipient;
     private Runnable mOverlayExpiry;
+    private volatile String mGeneratedInputOperationId;
+    private volatile long mGeneratedInputStopGuardUntil;
 
     private final IPhoneMdControl.Stub mBinder = new IPhoneMdControl.Stub() {
         @Override
@@ -239,6 +246,10 @@ public final class PlatformControlService extends Service {
             try {
                 final boolean overlayWasActive = hasOverlay();
                 final String overlayOperation = setOverlayInputPassthrough(true, null);
+                if (overlayOperation != null) {
+                    mGeneratedInputOperationId = overlayOperation;
+                    mGeneratedInputStopGuardUntil = Long.MAX_VALUE;
+                }
                 final boolean applied;
                 try {
                     applied = !overlayWasActive || overlayOperation != null
@@ -247,6 +258,8 @@ public final class PlatformControlService extends Service {
                 } finally {
                     if (overlayOperation != null) {
                         setOverlayInputPassthrough(false, overlayOperation);
+                        mGeneratedInputStopGuardUntil =
+                                SystemClock.uptimeMillis() + GENERATED_INPUT_STOP_GUARD_MILLIS;
                     }
                 }
                 if (applied) SystemClock.sleep(160);
@@ -785,7 +798,14 @@ public final class PlatformControlService extends Service {
                     stop.setText(stopLabel);
                     stop.setAllCaps(false);
                     stop.setOnClickListener(view -> {
+                        if (operationId.equals(mGeneratedInputOperationId)
+                                && SystemClock.uptimeMillis()
+                                <= mGeneratedInputStopGuardUntil) {
+                            Slog.w(TAG, "Ignored generated input on Stop: " + operationId);
+                            return;
+                        }
                         try {
+                            Slog.i(TAG, "User requested control stop: " + operationId);
                             callback.onCancelRequested(operationId);
                         } catch (RemoteException error) {
                             Slog.w(TAG, "Control callback died", error);
