@@ -15,11 +15,11 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
-import android.graphics.Region;
 import android.hardware.input.InputManager;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.SystemClock;
@@ -29,6 +29,8 @@ import android.util.Slog;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.InputEvent;
+import android.view.InputEventReceiver;
+import android.view.InputMonitor;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -77,16 +79,8 @@ public final class PlatformControlService extends Service {
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
+    private static final int GENERATED_MOTION_EDGE_FLAG = 0x40000000;
     private static final long OVERLAY_MAX_LIFETIME_MILLIS = 120_000;
-    // WAIT_FOR_FINISH proves that InputDispatcher handled the generated event,
-    // but the target View callback can still arrive after the input window is
-    // made touchable again. Keep Stop inert across that handoff so a generated
-    // top-edge tap can never cancel its own operation.
-    private static final long GENERATED_INPUT_STOP_GUARD_MILLIS = 300;
-    // InputManager's WAIT_FOR_FINISH can return before the target View callback
-    // has run. Leave the overlay invisible and non-touchable across that final
-    // dispatch handoff so restoring Stop cannot steal an already-injected tap.
-    private static final long GENERATED_INPUT_OVERLAY_RESTORE_DELAY_MILLIS = 350;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
     // Stay below the 0.80 platform threshold instead of relying on WindowManager
@@ -111,9 +105,10 @@ public final class PlatformControlService extends Service {
     private IBinder.DeathRecipient mOverlayDeathRecipient;
     private Runnable mOverlayExpiry;
     private boolean mOverlayConfirmation;
-    private boolean mOverlayDetachedForControl;
-    private volatile String mGeneratedInputOperationId;
-    private volatile long mGeneratedInputStopGuardUntil;
+    private boolean mOverlaySuppressedForCapture;
+    private InputMonitor mOverlayInputMonitor;
+    private InputEventReceiver mOverlayInputReceiver;
+    private final Rect mOverlayStopBounds = new Rect();
 
     private final IPhoneMdControl.Stub mBinder = new IPhoneMdControl.Stub() {
         @Override
@@ -164,7 +159,7 @@ public final class PlatformControlService extends Service {
             String suppressedOverlayOperation = null;
             try {
                 final boolean overlayWasActive = hasOverlay();
-                suppressedOverlayOperation = setOverlayInputPassthrough(true, null);
+                suppressedOverlayOperation = setOverlayCaptureSuppressed(true, null);
                 if (overlayWasActive && suppressedOverlayOperation == null) {
                     return timed(baseResult(requestId, STATUS_ERROR,
                             "The progress overlay could not be excluded from capture."), started);
@@ -225,7 +220,7 @@ public final class PlatformControlService extends Service {
                         "Display capture failed: " + error.getClass().getSimpleName()), started);
             } finally {
                 if (suppressedOverlayOperation != null) {
-                    setOverlayInputPassthrough(false, suppressedOverlayOperation);
+                    setOverlayCaptureSuppressed(false, suppressedOverlayOperation);
                 }
                 Binder.restoreCallingIdentity(identity);
             }
@@ -257,31 +252,22 @@ public final class PlatformControlService extends Service {
                 denied.putString("foreground_before", before);
                 return timed(denied, started);
             }
+            final int targetUid;
+            try {
+                targetUid = getPackageManager().getApplicationInfo(before, 0).uid;
+            } catch (PackageManager.NameNotFoundException error) {
+                return timed(baseResult(requestId, STATUS_DENIED,
+                        "The foreground app identity could not be resolved."), started);
+            }
 
             final long identity = Binder.clearCallingIdentity();
             try {
-                final boolean overlayWasActive = hasOverlay();
-                final String overlayOperation = setOverlayInputPassthrough(true, null);
-                if (overlayOperation != null) {
-                    mGeneratedInputOperationId = overlayOperation;
-                    mGeneratedInputStopGuardUntil = Long.MAX_VALUE;
-                }
-                final boolean applied;
-                try {
-                    applied = !overlayWasActive || overlayOperation != null
-                            ? executeChecked(action, request)
-                            : false;
-                } finally {
-                    if (overlayOperation != null) {
-                        if (!"screenshot".equals(action) && !"move".equals(action)) {
-                            SystemClock.sleep(
-                                    GENERATED_INPUT_OVERLAY_RESTORE_DELAY_MILLIS);
-                        }
-                        setOverlayInputPassthrough(false, overlayOperation);
-                        mGeneratedInputStopGuardUntil =
-                                SystemClock.uptimeMillis() + GENERATED_INPUT_STOP_GUARD_MILLIS;
-                    }
-                }
+                // InputDispatcher must deliver the action only to the exact app
+                // whose foreground identity was checked above. The co-pilot Stop
+                // is a non-touchable visual surface. A privileged gesture monitor
+                // handles real human Stop taps, while tagged generated touches
+                // continue only to the verified app UID.
+                final boolean applied = executeChecked(action, request, targetUid);
                 if (applied) SystemClock.sleep(160);
                 final String after = foregroundPackage();
                 if (after == null) {
@@ -433,19 +419,21 @@ public final class PlatformControlService extends Service {
         }
     }
 
-    private boolean executeChecked(String action, Bundle request) {
+    private boolean executeChecked(String action, Bundle request, int targetUid) {
         switch (action) {
             case "tap":
-                return tap(coordinate(request, "x", true), coordinate(request, "y", false));
+                return tap(coordinate(request, "x", true), coordinate(request, "y", false),
+                        targetUid);
             case "double_tap": {
                 int x = coordinate(request, "x", true);
                 int y = coordinate(request, "y", false);
-                boolean first = tap(x, y);
+                boolean first = tap(x, y, targetUid);
                 SystemClock.sleep(120);
-                return first && tap(x, y);
+                return first && tap(x, y, targetUid);
             }
             case "drag":
-                return drag(request.getIntArray("path_x"), request.getIntArray("path_y"));
+                return drag(request.getIntArray("path_x"), request.getIntArray("path_y"),
+                        targetUid);
             case "scroll": {
                 DisplayMetrics metrics = displayMetrics();
                 int x = clamp(request.getInt("x", metrics.widthPixels / 2), 0,
@@ -463,12 +451,13 @@ public final class PlatformControlService extends Service {
                                 y,
                                 clamp(y - dy / 2, 0, metrics.heightPixels - 1),
                                 clamp(y - dy, 0, metrics.heightPixels - 1),
-                            });
+                            },
+                        targetUid);
             }
             case "type_text":
-                return typeText(request.getString("text", ""));
+                return typeText(request.getString("text", ""), targetUid);
             case "key_press":
-                return keyPress(request.getStringArrayList("keys"));
+                return keyPress(request.getStringArrayList("keys"), targetUid);
             case "move":
             case "screenshot":
                 return true;
@@ -477,14 +466,15 @@ public final class PlatformControlService extends Service {
         }
     }
 
-    private boolean tap(int x, int y) {
+    private boolean tap(int x, int y, int targetUid) {
         long down = SystemClock.uptimeMillis();
-        boolean first = injectMotion(MotionEvent.ACTION_DOWN, down, down, x, y, 1.0f);
+        boolean first = injectMotion(MotionEvent.ACTION_DOWN, down, down, x, y, 1.0f,
+                targetUid);
         return injectMotion(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(),
-                x, y, 0.0f) && first;
+                x, y, 0.0f, targetUid) && first;
     }
 
-    private boolean drag(int[] xs, int[] ys) {
+    private boolean drag(int[] xs, int[] ys, int targetUid) {
         if (xs == null || ys == null || xs.length != ys.length || xs.length < 2
                 || xs.length > MAX_PATH_POINTS) {
             throw new IllegalArgumentException("A drag needs 2 to 128 matched points.");
@@ -507,7 +497,7 @@ public final class PlatformControlService extends Service {
 
         long down = SystemClock.uptimeMillis();
         boolean applied = injectMotion(MotionEvent.ACTION_DOWN, down, down,
-                xs[0], ys[0], 1.0f);
+                xs[0], ys[0], 1.0f, targetUid);
         final long end = down + GESTURE_DURATION_MILLIS;
         final float eventPeriodMillis = 1_000.0f / GESTURE_EVENT_HZ;
         int injected = 1;
@@ -525,12 +515,12 @@ public final class PlatformControlService extends Service {
                     (float) (now - down) / GESTURE_DURATION_MILLIS);
             final float[] point = interpolatePath(xs, ys, distanceAt, totalDistance, alpha);
             applied = injectMotion(MotionEvent.ACTION_MOVE, down, now,
-                    point[0], point[1], 1.0f) && applied;
+                    point[0], point[1], 1.0f, targetUid) && applied;
             injected++;
             now = SystemClock.uptimeMillis();
         }
         return injectMotion(MotionEvent.ACTION_UP, down, SystemClock.uptimeMillis(),
-                xs[xs.length - 1], ys[ys.length - 1], 0.0f) && applied;
+                xs[xs.length - 1], ys[ys.length - 1], 0.0f, targetUid) && applied;
     }
 
     private float[] interpolatePath(int[] xs, int[] ys, double[] distanceAt,
@@ -549,7 +539,7 @@ public final class PlatformControlService extends Service {
         };
     }
 
-    private boolean typeText(String text) {
+    private boolean typeText(String text, int targetUid) {
         if (text == null || text.length() > MAX_TEXT_LENGTH) {
             throw new IllegalArgumentException("Text input is too long.");
         }
@@ -566,7 +556,7 @@ public final class PlatformControlService extends Service {
                 clipboard.setPrimaryClipAsPackage(input, foreground);
             }
             SystemClock.sleep(40);
-            return injectKeyCode(KeyEvent.KEYCODE_PASTE, 0);
+            return injectKeyCode(KeyEvent.KEYCODE_PASTE, 0, targetUid);
         } finally {
             SystemClock.sleep(80);
             if (previous == null) {
@@ -579,7 +569,7 @@ public final class PlatformControlService extends Service {
         }
     }
 
-    private boolean keyPress(ArrayList<String> keys) {
+    private boolean keyPress(ArrayList<String> keys, int targetUid) {
         if (keys == null || keys.isEmpty() || keys.size() > 8) {
             throw new IllegalArgumentException("A key press needs 1 to 8 keys.");
         }
@@ -616,12 +606,19 @@ public final class PlatformControlService extends Service {
             }
         }
         if (main == null) throw new IllegalArgumentException("A key chord needs a non-modifier key.");
+        if (main == KeyEvent.KEYCODE_HOME && modifiers.isEmpty()) {
+            return injectKeyCode(KeyEvent.KEYCODE_HOME, 0);
+        }
         boolean applied = true;
-        for (int modifier : modifiers) applied = injectKeyEvent(KeyEvent.ACTION_DOWN, modifier, metaState) && applied;
-        applied = injectKeyEvent(KeyEvent.ACTION_DOWN, main, metaState) && applied;
-        applied = injectKeyEvent(KeyEvent.ACTION_UP, main, metaState) && applied;
+        for (int modifier : modifiers) {
+            applied = injectKeyEvent(KeyEvent.ACTION_DOWN, modifier, metaState, targetUid)
+                    && applied;
+        }
+        applied = injectKeyEvent(KeyEvent.ACTION_DOWN, main, metaState, targetUid) && applied;
+        applied = injectKeyEvent(KeyEvent.ACTION_UP, main, metaState, targetUid) && applied;
         for (int index = modifiers.size() - 1; index >= 0; index--) {
-            applied = injectKeyEvent(KeyEvent.ACTION_UP, modifiers.get(index), metaState) && applied;
+            applied = injectKeyEvent(KeyEvent.ACTION_UP, modifiers.get(index), metaState,
+                    targetUid) && applied;
         }
         return applied;
     }
@@ -648,7 +645,7 @@ public final class PlatformControlService extends Service {
     }
 
     private boolean injectMotion(int action, long downTime, long eventTime,
-            float x, float y, float pressure) {
+            float x, float y, float pressure, int targetUid) {
         MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
         properties.id = 0;
         properties.toolType = MotionEvent.TOOL_TYPE_FINGER;
@@ -669,12 +666,12 @@ public final class PlatformControlService extends Service {
                 1.0f,
                 1.0f,
                 touchscreenDeviceId(),
-                0,
+                GENERATED_MOTION_EDGE_FLAG,
                 InputDevice.SOURCE_TOUCHSCREEN,
                 Display.DEFAULT_DISPLAY,
                 0);
         try {
-            return inject(event);
+            return inject(event, targetUid);
         } finally {
             event.recycle();
         }
@@ -695,15 +692,32 @@ public final class PlatformControlService extends Service {
                 && injectKeyEvent(KeyEvent.ACTION_UP, keyCode, metaState);
     }
 
+    private boolean injectKeyCode(int keyCode, int metaState, int targetUid) {
+        return injectKeyEvent(KeyEvent.ACTION_DOWN, keyCode, metaState, targetUid)
+                && injectKeyEvent(KeyEvent.ACTION_UP, keyCode, metaState, targetUid);
+    }
+
     private boolean injectKeyEvent(int action, int keyCode, int metaState) {
         long now = SystemClock.uptimeMillis();
         return inject(new KeyEvent(now, now, action, keyCode, 0, metaState,
                 KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD));
     }
 
+    private boolean injectKeyEvent(int action, int keyCode, int metaState, int targetUid) {
+        long now = SystemClock.uptimeMillis();
+        return inject(new KeyEvent(now, now, action, keyCode, 0, metaState,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD),
+                targetUid);
+    }
+
     private boolean inject(InputEvent event) {
         return InputManager.getInstance().injectInputEvent(
                 event, InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH);
+    }
+
+    private boolean inject(InputEvent event, int targetUid) {
+        return InputManager.getInstance().injectInputEvent(
+                event, InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH, targetUid);
     }
 
     private int coordinate(Bundle request, String key, boolean horizontal) {
@@ -796,7 +810,7 @@ public final class PlatformControlService extends Service {
                 panel.addView(copy, new LinearLayout.LayoutParams(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-                final ArrayList<View> progressTouchTargets = new ArrayList<>();
+                Button progressStop = null;
 
                 if (confirmation) {
                     Button deny = new Button(this);
@@ -817,49 +831,25 @@ public final class PlatformControlService extends Service {
                     Button stop = new Button(this);
                     stop.setText(stopLabel);
                     stop.setAllCaps(false);
-                    stop.setOnClickListener(view -> {
-                        if (operationId.equals(mGeneratedInputOperationId)
-                                && SystemClock.uptimeMillis()
-                                <= mGeneratedInputStopGuardUntil) {
-                            Slog.w(TAG, "Ignored generated input on Stop: " + operationId);
-                            return;
-                        }
-                        try {
-                            Slog.i(TAG, "User requested control stop: " + operationId);
-                            callback.onCancelRequested(operationId);
-                        } catch (RemoteException error) {
-                            Slog.w(TAG, "Control callback died", error);
-                        }
-                        hideOverlay(operationId);
-                    });
                     panel.addView(stop, new LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)));
-                    progressTouchTargets.add(stop);
+                    progressStop = stop;
                 }
 
+                int windowFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
                 if (!confirmation) {
-                    // The progress banner is visible to the person but omitted from
-                    // computer-use captures. Only Stop owns touch; the rest of the
-                    // banner must pass both human and injected input to the app below.
-                    panel.getViewTreeObserver().addOnComputeInternalInsetsListener(info -> {
-                        info.setTouchableInsets(
-                                ViewTreeObserver.InternalInsetsInfo.TOUCHABLE_INSETS_REGION);
-                        info.touchableRegion.setEmpty();
-                        Rect bounds = new Rect();
-                        for (View target : progressTouchTargets) {
-                            target.getHitRect(bounds);
-                            info.touchableRegion.op(bounds, Region.Op.UNION);
-                        }
-                    });
+                    // The visible progress surface never participates in normal
+                    // input dispatch. A gesture monitor below owns only a real
+                    // human tap on the Stop bounds.
+                    windowFlags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
                 }
-
                 WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                         WindowManager.LayoutParams.MATCH_PARENT,
                         WindowManager.LayoutParams.WRAP_CONTENT,
                         WindowManager.LayoutParams.TYPE_SYSTEM_ERROR,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        windowFlags,
                         PixelFormat.TRANSLUCENT);
                 params.gravity = android.view.Gravity.TOP;
                 params.setTitle("phone.md co-pilot");
@@ -872,7 +862,10 @@ public final class PlatformControlService extends Service {
                 mOverlayCallback = callback;
                 mOverlayDeathRecipient = deathRecipient;
                 mOverlayConfirmation = confirmation;
-                mOverlayDetachedForControl = false;
+                mOverlaySuppressedForCapture = false;
+                if (!confirmation) {
+                    startOverlayStopMonitor(operationId, callback, progressStop);
+                }
                 mOverlayExpiry = () -> {
                     Slog.w(TAG, "Expiring stale control overlay: " + operationId);
                     hideOverlay(operationId);
@@ -887,6 +880,67 @@ public final class PlatformControlService extends Service {
         }
     }
 
+    private void startOverlayStopMonitor(String operationId,
+            IPhoneMdControlCallback callback, View stop) {
+        if (stop == null) {
+            throw new IllegalStateException("A progress overlay needs a Stop control.");
+        }
+        mOverlayStopBounds.setEmpty();
+        stop.addOnLayoutChangeListener((view, left, top, right, bottom,
+                oldLeft, oldTop, oldRight, oldBottom) ->
+                updateOverlayStopBounds(operationId, view));
+        stop.post(() -> updateOverlayStopBounds(operationId, stop));
+
+        InputMonitor monitor = getSystemService(InputManager.class)
+                .monitorGestureInput("phone.md co-pilot Stop", Display.DEFAULT_DISPLAY);
+        mOverlayInputMonitor = monitor;
+        mOverlayInputReceiver = new InputEventReceiver(
+                monitor.getInputChannel(), Looper.getMainLooper()) {
+            @Override
+            public void onInputEvent(InputEvent event) {
+                try {
+                    if (!(event instanceof MotionEvent)) return;
+                    MotionEvent motion = (MotionEvent) event;
+                    if (motion.getActionMasked() != MotionEvent.ACTION_DOWN
+                            || (motion.getEdgeFlags() & GENERATED_MOTION_EDGE_FLAG) != 0) {
+                        return;
+                    }
+                    final boolean stopHit;
+                    synchronized (mOverlayLock) {
+                        stopHit = operationId.equals(mOverlayOperationId)
+                                && mOverlayStopBounds.contains(
+                                        Math.round(motion.getRawX()),
+                                        Math.round(motion.getRawY()));
+                    }
+                    if (!stopHit) return;
+                    monitor.pilferPointers();
+                    try {
+                        Slog.i(TAG, "User requested control stop: " + operationId);
+                        callback.onCancelRequested(operationId);
+                    } catch (RemoteException error) {
+                        Slog.w(TAG, "Control callback died", error);
+                    }
+                    mMainHandler.post(() -> hideOverlay(operationId));
+                } finally {
+                    finishInputEvent(event, true);
+                }
+            }
+        };
+    }
+
+    private void updateOverlayStopBounds(String operationId, View stop) {
+        int[] location = new int[2];
+        stop.getLocationOnScreen(location);
+        synchronized (mOverlayLock) {
+            if (!operationId.equals(mOverlayOperationId)) return;
+            mOverlayStopBounds.set(
+                    location[0],
+                    location[1],
+                    location[0] + stop.getWidth(),
+                    location[1] + stop.getHeight());
+        }
+    }
+
     private void deliverConfirmation(IPhoneMdControlCallback callback,
             String operationId, boolean approved) {
         try {
@@ -898,14 +952,14 @@ public final class PlatformControlService extends Service {
     }
 
     /**
-     * Suppresses an active progress banner for one capture or injected action.
-     * The model sees the app pixels the user asked it to control, and the Stop
-     * button cannot become the target of model-generated coordinates.
+     * Suppresses an active progress banner for one capture. The model sees only
+     * the app pixels the user asked it to control.
      */
-    private String setOverlayInputPassthrough(boolean passthrough,
+    private String setOverlayCaptureSuppressed(boolean suppressed,
             String expectedOperationId) {
         AtomicReference<String> affectedOperation = new AtomicReference<>();
         CountDownLatch finished = new CountDownLatch(1);
+        CountDownLatch windowTraversalFinished = new CountDownLatch(1);
         Runnable task = () -> {
             try {
                 synchronized (mOverlayLock) {
@@ -915,25 +969,29 @@ public final class PlatformControlService extends Service {
                     if (mOverlayConfirmation) return;
                     WindowManager.LayoutParams params =
                             (WindowManager.LayoutParams) mOverlay.getLayoutParams();
-                    if (passthrough) {
-                        if (!mOverlayDetachedForControl) {
-                            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    if (suppressed) {
+                        if (!mOverlaySuppressedForCapture) {
+                            awaitNextOverlayLayout(windowTraversalFinished);
                             params.alpha = 0.0f;
-                            mOverlay.setVisibility(View.INVISIBLE);
-                            mWindowManager.removeViewImmediate(mOverlay);
-                            mOverlayDetachedForControl = true;
+                            mWindowManager.updateViewLayout(mOverlay, params);
+                            mOverlay.requestLayout();
+                            mOverlaySuppressedForCapture = true;
+                        } else {
+                            windowTraversalFinished.countDown();
                         }
-                    } else if (mOverlayDetachedForControl) {
-                        mOverlay.setVisibility(View.VISIBLE);
-                        params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    } else if (mOverlaySuppressedForCapture) {
+                        awaitNextOverlayLayout(windowTraversalFinished);
                         params.alpha = PROGRESS_OVERLAY_WINDOW_ALPHA;
-                        mWindowManager.addView(mOverlay, params);
-                        mOverlayDetachedForControl = false;
+                        mWindowManager.updateViewLayout(mOverlay, params);
+                        mOverlay.requestLayout();
+                        mOverlaySuppressedForCapture = false;
+                    } else {
+                        windowTraversalFinished.countDown();
                     }
                     affectedOperation.set(mOverlayOperationId);
                 }
             } catch (Throwable error) {
-                Slog.e(TAG, "Could not change control overlay input mode", error);
+                Slog.e(TAG, "Could not change control overlay capture mode", error);
             } finally {
                 finished.countDown();
             }
@@ -945,7 +1003,7 @@ public final class PlatformControlService extends Service {
         }
         try {
             if (!finished.await(2, TimeUnit.SECONDS)) {
-                Slog.e(TAG, "Timed out changing control overlay input mode");
+                Slog.e(TAG, "Timed out changing control overlay capture mode");
                 return null;
             }
         } catch (InterruptedException error) {
@@ -955,14 +1013,36 @@ public final class PlatformControlService extends Service {
         final String operationId = affectedOperation.get();
         if (operationId == null) return null;
         try {
-            // Force the remove/add transaction through InputDispatcher before
+            if (!windowTraversalFinished.await(1, TimeUnit.SECONDS)) {
+                Slog.e(TAG, "Timed out publishing control overlay capture mode");
+                return null;
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        try {
+            // Force the touchability update through InputDispatcher before
             // injecting or accepting a human Stop tap.
             WindowManagerGlobal.getWindowManagerService().syncInputTransactions(false);
         } catch (Throwable error) {
-            Slog.e(TAG, "Could not synchronize control overlay input mode", error);
+            Slog.e(TAG, "Could not synchronize control overlay capture mode", error);
             return null;
         }
         return operationId;
+    }
+
+    private void awaitNextOverlayLayout(CountDownLatch finished) {
+        final ViewTreeObserver observer = mOverlay.getViewTreeObserver();
+        final ViewTreeObserver.OnGlobalLayoutListener[] listener =
+                new ViewTreeObserver.OnGlobalLayoutListener[1];
+        listener[0] = () -> {
+            if (observer.isAlive()) {
+                observer.removeOnGlobalLayoutListener(listener[0]);
+            }
+            finished.countDown();
+        };
+        observer.addOnGlobalLayoutListener(listener[0]);
     }
 
     private boolean hasOverlay() {
@@ -980,12 +1060,10 @@ public final class PlatformControlService extends Service {
     private void hideOverlayLocked(String operationId) {
         if (mOverlay == null) return;
         if (operationId != null && !operationId.equals(mOverlayOperationId)) return;
-        if (!mOverlayDetachedForControl) {
-            try {
-                mWindowManager.removeViewImmediate(mOverlay);
-            } catch (Throwable error) {
-                Slog.w(TAG, "Could not remove control overlay", error);
-            }
+        try {
+            mWindowManager.removeViewImmediate(mOverlay);
+        } catch (Throwable error) {
+            Slog.w(TAG, "Could not remove control overlay", error);
         }
         if (mOverlayCallback != null && mOverlayDeathRecipient != null) {
             mOverlayCallback.asBinder().unlinkToDeath(mOverlayDeathRecipient, 0);
@@ -993,12 +1071,21 @@ public final class PlatformControlService extends Service {
         if (mOverlayExpiry != null) {
             mMainHandler.removeCallbacks(mOverlayExpiry);
         }
+        if (mOverlayInputReceiver != null) {
+            mOverlayInputReceiver.dispose();
+        }
+        if (mOverlayInputMonitor != null) {
+            mOverlayInputMonitor.dispose();
+        }
         mOverlay = null;
         mOverlayOperationId = null;
         mOverlayCallback = null;
         mOverlayDeathRecipient = null;
         mOverlayConfirmation = false;
-        mOverlayDetachedForControl = false;
+        mOverlaySuppressedForCapture = false;
+        mOverlayInputReceiver = null;
+        mOverlayInputMonitor = null;
+        mOverlayStopBounds.setEmpty();
         mOverlayExpiry = null;
     }
 
