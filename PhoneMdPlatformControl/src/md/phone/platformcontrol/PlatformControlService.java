@@ -106,6 +106,7 @@ public final class PlatformControlService extends Service {
     private IPhoneMdControlCallback mOverlayCallback;
     private IBinder.DeathRecipient mOverlayDeathRecipient;
     private Runnable mOverlayExpiry;
+    private boolean mOverlayConfirmation;
     private volatile String mGeneratedInputOperationId;
     private volatile long mGeneratedInputStopGuardUntil;
 
@@ -155,7 +156,14 @@ public final class PlatformControlService extends Service {
             }
 
             final long identity = Binder.clearCallingIdentity();
+            String suppressedOverlayOperation = null;
             try {
+                final boolean overlayWasActive = hasOverlay();
+                suppressedOverlayOperation = setOverlayInputPassthrough(true, null);
+                if (overlayWasActive && suppressedOverlayOperation == null) {
+                    return timed(baseResult(requestId, STATUS_ERROR,
+                            "The progress overlay could not be excluded from capture."), started);
+                }
                 ScreenCapture.SynchronousScreenCaptureListener listener =
                         ScreenCapture.createSyncCaptureListener();
                 WindowManagerGlobal.getWindowManagerService().captureDisplay(
@@ -211,6 +219,9 @@ public final class PlatformControlService extends Service {
                 return timed(baseResult(requestId, STATUS_ERROR,
                         "Display capture failed: " + error.getClass().getSimpleName()), started);
             } finally {
+                if (suppressedOverlayOperation != null) {
+                    setOverlayInputPassthrough(false, suppressedOverlayOperation);
+                }
                 Binder.restoreCallingIdentity(identity);
             }
         }
@@ -851,6 +862,7 @@ public final class PlatformControlService extends Service {
                 mOverlayOperationId = operationId;
                 mOverlayCallback = callback;
                 mOverlayDeathRecipient = deathRecipient;
+                mOverlayConfirmation = confirmation;
                 mOverlayExpiry = () -> {
                     Slog.w(TAG, "Expiring stale control overlay: " + operationId);
                     hideOverlay(operationId);
@@ -876,9 +888,9 @@ public final class PlatformControlService extends Service {
     }
 
     /**
-     * Makes an active task banner transparent to one injected action. Even the
-     * Stop button must not become the target of model-generated coordinates;
-     * the input mode is restored immediately after Android finishes the action.
+     * Suppresses an active progress banner for one capture or injected action.
+     * The model sees the app pixels the user asked it to control, and the Stop
+     * button cannot become the target of model-generated coordinates.
      */
     private String setOverlayInputPassthrough(boolean passthrough,
             String expectedOperationId) {
@@ -890,14 +902,18 @@ public final class PlatformControlService extends Service {
                     if (mOverlay == null) return;
                     if (expectedOperationId != null
                             && !expectedOperationId.equals(mOverlayOperationId)) return;
+                    if (mOverlayConfirmation) return;
                     WindowManager.LayoutParams params =
                             (WindowManager.LayoutParams) mOverlay.getLayoutParams();
                     if (passthrough) {
                         params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                        mWindowManager.updateViewLayout(mOverlay, params);
+                        mOverlay.setVisibility(View.INVISIBLE);
                     } else {
+                        mOverlay.setVisibility(View.VISIBLE);
                         params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                        mWindowManager.updateViewLayout(mOverlay, params);
                     }
-                    mWindowManager.updateViewLayout(mOverlay, params);
                     affectedOperation.set(mOverlayOperationId);
                 }
             } catch (Throwable error) {
@@ -964,6 +980,7 @@ public final class PlatformControlService extends Service {
         mOverlayOperationId = null;
         mOverlayCallback = null;
         mOverlayDeathRecipient = null;
+        mOverlayConfirmation = false;
         mOverlayExpiry = null;
     }
 
