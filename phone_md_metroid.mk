@@ -19,9 +19,14 @@ PRODUCT_MODEL := Phone (3)
 # PhoneMdLauncher's module overrides remove LineageSetupWizard and Provision;
 # PRODUCT_PACKAGES subtraction cannot remove an inherited product package.
 PRODUCT_PACKAGES += \
+    AppStore \
     PhoneMdLauncher \
     PhoneMdLocaleController \
     PhoneMdPlatformControl
+
+# Apps is the signed, privileged catalog client used to install the official
+# Google Play components on demand. The proprietary Google packages are never
+# baked into the ROM; they stay optional, user-installed, and unprivileged.
 
 # The ROM, not an onboarding wizard, owns the ordinary runtime grants needed by
 # its only HOME and voice agent. Platform/signature authorities stay ungranted
