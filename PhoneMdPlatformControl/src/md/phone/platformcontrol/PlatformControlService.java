@@ -111,6 +111,7 @@ public final class PlatformControlService extends Service {
     private IBinder.DeathRecipient mOverlayDeathRecipient;
     private Runnable mOverlayExpiry;
     private boolean mOverlayConfirmation;
+    private boolean mOverlayDetachedForControl;
     private volatile String mGeneratedInputOperationId;
     private volatile long mGeneratedInputStopGuardUntil;
 
@@ -871,6 +872,7 @@ public final class PlatformControlService extends Service {
                 mOverlayCallback = callback;
                 mOverlayDeathRecipient = deathRecipient;
                 mOverlayConfirmation = confirmation;
+                mOverlayDetachedForControl = false;
                 mOverlayExpiry = () -> {
                     Slog.w(TAG, "Expiring stale control overlay: " + operationId);
                     hideOverlay(operationId);
@@ -914,13 +916,19 @@ public final class PlatformControlService extends Service {
                     WindowManager.LayoutParams params =
                             (WindowManager.LayoutParams) mOverlay.getLayoutParams();
                     if (passthrough) {
-                        params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-                        mWindowManager.updateViewLayout(mOverlay, params);
-                        mOverlay.setVisibility(View.INVISIBLE);
-                    } else {
+                        if (!mOverlayDetachedForControl) {
+                            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                            params.alpha = 0.0f;
+                            mOverlay.setVisibility(View.INVISIBLE);
+                            mWindowManager.removeViewImmediate(mOverlay);
+                            mOverlayDetachedForControl = true;
+                        }
+                    } else if (mOverlayDetachedForControl) {
                         mOverlay.setVisibility(View.VISIBLE);
                         params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-                        mWindowManager.updateViewLayout(mOverlay, params);
+                        params.alpha = PROGRESS_OVERLAY_WINDOW_ALPHA;
+                        mWindowManager.addView(mOverlay, params);
+                        mOverlayDetachedForControl = false;
                     }
                     affectedOperation.set(mOverlayOperationId);
                 }
@@ -947,9 +955,8 @@ public final class PlatformControlService extends Service {
         final String operationId = affectedOperation.get();
         if (operationId == null) return null;
         try {
-            // updateViewLayout returns before InputDispatcher necessarily sees the
-            // new window flags. Force that transaction through before injecting;
-            // otherwise a top-edge tap can still be rejected as obscured input.
+            // Force the remove/add transaction through InputDispatcher before
+            // injecting or accepting a human Stop tap.
             WindowManagerGlobal.getWindowManagerService().syncInputTransactions(false);
         } catch (Throwable error) {
             Slog.e(TAG, "Could not synchronize control overlay input mode", error);
@@ -973,10 +980,12 @@ public final class PlatformControlService extends Service {
     private void hideOverlayLocked(String operationId) {
         if (mOverlay == null) return;
         if (operationId != null && !operationId.equals(mOverlayOperationId)) return;
-        try {
-            mWindowManager.removeViewImmediate(mOverlay);
-        } catch (Throwable error) {
-            Slog.w(TAG, "Could not remove control overlay", error);
+        if (!mOverlayDetachedForControl) {
+            try {
+                mWindowManager.removeViewImmediate(mOverlay);
+            } catch (Throwable error) {
+                Slog.w(TAG, "Could not remove control overlay", error);
+            }
         }
         if (mOverlayCallback != null && mOverlayDeathRecipient != null) {
             mOverlayCallback.asBinder().unlinkToDeath(mOverlayDeathRecipient, 0);
@@ -989,6 +998,7 @@ public final class PlatformControlService extends Service {
         mOverlayCallback = null;
         mOverlayDeathRecipient = null;
         mOverlayConfirmation = false;
+        mOverlayDetachedForControl = false;
         mOverlayExpiry = null;
     }
 
