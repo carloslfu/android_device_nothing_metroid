@@ -83,6 +83,10 @@ public final class PlatformControlService extends Service {
     // made touchable again. Keep Stop inert across that handoff so a generated
     // top-edge tap can never cancel its own operation.
     private static final long GENERATED_INPUT_STOP_GUARD_MILLIS = 300;
+    // InputManager's WAIT_FOR_FINISH can return before the target View callback
+    // has run. Leave the overlay invisible and non-touchable across that final
+    // dispatch handoff so restoring Stop cannot steal an already-injected tap.
+    private static final long GENERATED_INPUT_OVERLAY_RESTORE_DELAY_MILLIS = 350;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
     // Stay below the 0.80 platform threshold instead of relying on WindowManager
@@ -268,6 +272,10 @@ public final class PlatformControlService extends Service {
                             : false;
                 } finally {
                     if (overlayOperation != null) {
+                        if (!"screenshot".equals(action) && !"move".equals(action)) {
+                            SystemClock.sleep(
+                                    GENERATED_INPUT_OVERLAY_RESTORE_DELAY_MILLIS);
+                        }
                         setOverlayInputPassthrough(false, overlayOperation);
                         mGeneratedInputStopGuardUntil =
                                 SystemClock.uptimeMillis() + GENERATED_INPUT_STOP_GUARD_MILLIS;
