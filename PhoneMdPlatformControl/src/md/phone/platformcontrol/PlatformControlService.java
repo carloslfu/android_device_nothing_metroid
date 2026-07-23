@@ -77,6 +77,7 @@ public final class PlatformControlService extends Service {
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
+    private static final long OVERLAY_MAX_LIFETIME_MILLIS = 120_000;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
     // Stay below the 0.80 platform threshold instead of relying on WindowManager
@@ -99,6 +100,7 @@ public final class PlatformControlService extends Service {
     private String mOverlayOperationId;
     private IPhoneMdControlCallback mOverlayCallback;
     private IBinder.DeathRecipient mOverlayDeathRecipient;
+    private Runnable mOverlayExpiry;
 
     private final IPhoneMdControl.Stub mBinder = new IPhoneMdControl.Stub() {
         @Override
@@ -829,6 +831,11 @@ public final class PlatformControlService extends Service {
                 mOverlayOperationId = operationId;
                 mOverlayCallback = callback;
                 mOverlayDeathRecipient = deathRecipient;
+                mOverlayExpiry = () -> {
+                    Slog.w(TAG, "Expiring stale control overlay: " + operationId);
+                    hideOverlay(operationId);
+                };
+                mMainHandler.postDelayed(mOverlayExpiry, OVERLAY_MAX_LIFETIME_MILLIS);
                 return true;
             } catch (Throwable error) {
                 callbackBinder.unlinkToDeath(deathRecipient, 0);
@@ -930,10 +937,14 @@ public final class PlatformControlService extends Service {
         if (mOverlayCallback != null && mOverlayDeathRecipient != null) {
             mOverlayCallback.asBinder().unlinkToDeath(mOverlayDeathRecipient, 0);
         }
+        if (mOverlayExpiry != null) {
+            mMainHandler.removeCallbacks(mOverlayExpiry);
+        }
         mOverlay = null;
         mOverlayOperationId = null;
         mOverlayCallback = null;
         mOverlayDeathRecipient = null;
+        mOverlayExpiry = null;
     }
 
     private int dp(int value) {
