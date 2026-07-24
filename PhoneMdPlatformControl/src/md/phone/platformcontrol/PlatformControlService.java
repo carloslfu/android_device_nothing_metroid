@@ -52,9 +52,11 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -74,13 +76,15 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 5;
+    private static final int PROTOCOL_VERSION = 6;
     private static final int MAX_TEXT_LENGTH = 20_000;
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
     private static final int GENERATED_MOTION_EDGE_FLAG = 0x40000000;
     private static final long OVERLAY_MAX_LIFETIME_MILLIS = 120_000;
+    private static final long FRAME_TOKEN_MAX_AGE_MILLIS = 45_000;
+    private static final int MAX_FRAME_CONTEXTS = 8;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
     // Stay below the 0.80 platform threshold instead of relying on WindowManager
@@ -97,6 +101,8 @@ public final class PlatformControlService extends Service {
     private final android.os.Handler mMainHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private final Object mOverlayLock = new Object();
+    private final Object mFrameLock = new Object();
+    private final LinkedHashMap<String, FrameContext> mFrameContexts = new LinkedHashMap<>();
 
     private WindowManager mWindowManager;
     private View mOverlay;
@@ -124,6 +130,9 @@ public final class PlatformControlService extends Service {
             result.putInt("protocol_version", PROTOCOL_VERSION);
             result.putBoolean("capture", true);
             result.putBoolean("input", true);
+            result.putBoolean("ui_semantics", true);
+            result.putBoolean("frame_locked_input", true);
+            result.putBoolean("system_surface_input", true);
             result.putBoolean("unicode_text", true);
             result.putBoolean("copilot_overlay", true);
             result.putBoolean("financial_package_boundary", true);
@@ -207,12 +216,21 @@ public final class PlatformControlService extends Service {
                         capture, ParcelFileDescriptor.MODE_READ_ONLY);
                 if (!capture.delete()) capture.deleteOnExit();
 
+                final String frameSha256 = hex(digest.digest());
+                final UiSemanticsSnapshot semantics =
+                        UiSemanticsSnapshot.capture(PlatformControlService.this, width, height);
+                final String frameToken = UUID.randomUUID().toString();
+                rememberFrame(frameToken, foreground, frameSha256, semantics);
+
                 Bundle result = baseResult(requestId, STATUS_OK, "Display captured.");
                 result.putParcelable("image_fd", descriptor);
                 result.putInt("width", width);
                 result.putInt("height", height);
-                result.putString("sha256", hex(digest.digest()));
+                result.putString("sha256", frameSha256);
                 result.putString("foreground_package", foreground);
+                result.putString("frame_token", frameToken);
+                result.putBoolean("ui_semantics_available", semantics.available);
+                result.putString("ui_semantics", semantics.json);
                 return timed(result, started);
             } catch (Throwable error) {
                 Slog.e(TAG, "Display capture failed", error);
@@ -252,12 +270,39 @@ public final class PlatformControlService extends Service {
                 denied.putString("foreground_before", before);
                 return timed(denied, started);
             }
+            final String frameToken = request.getString("frame_token");
+            if (frameToken == null || frameToken.isBlank()) {
+                return timed(baseResult(requestId, STATUS_DENIED,
+                        "Input requires the exact captured visual frame."), started);
+            }
+            final FrameContext frame = consumeFrameContext(frameToken);
+            if (frame == null) {
+                return timed(baseResult(requestId, STATUS_DENIED,
+                        "The visual frame expired; capture the screen again."), started);
+            }
+            if (!before.equals(frame.foregroundPackage)) {
+                Bundle denied = baseResult(requestId, STATUS_DENIED,
+                        "The foreground changed after the visual frame; capture again.");
+                denied.putString("foreground_before", before);
+                denied.putString("frame_foreground", frame.foregroundPackage);
+                return timed(denied, started);
+            }
+            final String targetPackage = targetPackage(action, request, before, frame);
+            if (isFinancialPackage(targetPackage)) {
+                returnHome();
+                Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
+                        "Input is blocked for financial apps; returned Home.");
+                denied.putString("action", action);
+                denied.putString("foreground_before", before);
+                denied.putString("target_package", targetPackage);
+                return timed(denied, started);
+            }
             final int targetUid;
             try {
-                targetUid = getPackageManager().getApplicationInfo(before, 0).uid;
+                targetUid = getPackageManager().getApplicationInfo(targetPackage, 0).uid;
             } catch (PackageManager.NameNotFoundException error) {
                 return timed(baseResult(requestId, STATUS_DENIED,
-                        "The foreground app identity could not be resolved."), started);
+                        "The visible input target identity could not be resolved."), started);
             }
 
             final long identity = Binder.clearCallingIdentity();
@@ -295,6 +340,8 @@ public final class PlatformControlService extends Service {
                 result.putBoolean("applied", applied);
                 result.putString("foreground_before", before);
                 result.putString("foreground_after", after);
+                result.putString("target_package", targetPackage);
+                result.putBoolean("frame_token_checked", frame != null);
                 return timed(result, started);
             } catch (IllegalArgumentException error) {
                 return timed(baseResult(requestId, STATUS_INVALID, error.getMessage()), started);
@@ -463,6 +510,81 @@ public final class PlatformControlService extends Service {
                 return true;
             default:
                 throw new IllegalArgumentException("Unsupported action: " + action);
+        }
+    }
+
+    private String targetPackage(String action, Bundle request, String fallback,
+            FrameContext frame) {
+        if (frame == null || frame.semantics == null) return fallback;
+        switch (action) {
+            case "tap":
+            case "double_tap":
+                return frame.semantics.packageAt(
+                        coordinate(request, "x", true),
+                        coordinate(request, "y", false),
+                        fallback,
+                        false);
+            case "scroll":
+                DisplayMetrics metrics = displayMetrics();
+                return frame.semantics.packageAt(
+                        clamp(request.getInt("x", metrics.widthPixels / 2),
+                                0, metrics.widthPixels - 1),
+                        clamp(request.getInt("y", metrics.heightPixels / 2),
+                                0, metrics.heightPixels - 1),
+                        fallback,
+                        true);
+            case "drag":
+                int[] xs = request.getIntArray("path_x");
+                int[] ys = request.getIntArray("path_y");
+                if (xs != null && ys != null && xs.length > 0 && ys.length > 0) {
+                    return frame.semantics.packageAt(xs[0], ys[0], fallback, false);
+                }
+                return fallback;
+            case "type_text":
+            case "key_press":
+                return frame.semantics.inputPackage(fallback);
+            default:
+                return fallback;
+        }
+    }
+
+    private void rememberFrame(String token, String foreground, String sha256,
+            UiSemanticsSnapshot semantics) {
+        synchronized (mFrameLock) {
+            pruneFramesLocked();
+            mFrameContexts.put(token, new FrameContext(
+                    foreground, sha256, semantics, SystemClock.elapsedRealtime()));
+            while (mFrameContexts.size() > MAX_FRAME_CONTEXTS) {
+                String oldest = mFrameContexts.keySet().iterator().next();
+                mFrameContexts.remove(oldest);
+            }
+        }
+    }
+
+    private FrameContext consumeFrameContext(String token) {
+        synchronized (mFrameLock) {
+            pruneFramesLocked();
+            return mFrameContexts.remove(token);
+        }
+    }
+
+    private void pruneFramesLocked() {
+        final long cutoff = SystemClock.elapsedRealtime() - FRAME_TOKEN_MAX_AGE_MILLIS;
+        mFrameContexts.entrySet().removeIf(entry -> entry.getValue().capturedAt < cutoff);
+    }
+
+    private static final class FrameContext {
+        final String foregroundPackage;
+        final String sha256;
+        final UiSemanticsSnapshot semantics;
+        final long capturedAt;
+
+        FrameContext(String foregroundPackage, String sha256,
+                UiSemanticsSnapshot semantics, long capturedAt) {
+            this.foregroundPackage = foregroundPackage;
+            this.sha256 = sha256;
+            this.semantics = semantics;
+            this.capturedAt = capturedAt;
         }
     }
 

@@ -9,6 +9,7 @@
     <privapp-permissions package="md.phone.platformcontrol">
         <permission name="android.permission.INSTALL_PACKAGES" />
         <permission name="android.permission.DELETE_PACKAGES" />
+        <permission name="android.permission.RETRIEVE_WINDOW_CONTENT" />
         <permission name="android.permission.REBOOT" />
         <permission name="android.permission.TETHER_PRIVILEGED" />
         <permission name="android.permission.WRITE_SECURE_SETTINGS" />
