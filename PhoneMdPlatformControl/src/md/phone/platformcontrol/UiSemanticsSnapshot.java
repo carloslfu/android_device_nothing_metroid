@@ -141,14 +141,14 @@ final class UiSemanticsSnapshot {
         return regions.stream()
                 .filter(region -> region.packageName != null && region.bounds.contains(x, y))
                 .sorted((left, right) -> {
-                    int layer = Integer.compare(right.layer, left.layer);
-                    if (layer != 0) return layer;
                     if (preferScrollable && left.scrollable != right.scrollable) {
                         return left.scrollable ? -1 : 1;
                     }
                     if (left.interactive != right.interactive) {
                         return left.interactive ? -1 : 1;
                     }
+                    int layer = Integer.compare(right.layer, left.layer);
+                    if (layer != 0) return layer;
                     if (left.focused != right.focused) return left.focused ? -1 : 1;
                     int depth = Integer.compare(right.depth, left.depth);
                     if (depth != 0) return depth;
@@ -180,6 +180,15 @@ final class UiSemanticsSnapshot {
             // visible to the user without becoming a model target or masking
             // the real Android control underneath it.
             if (BROKER_PACKAGE.equals(windowPackage)) continue;
+            // Accessibility can retain a collapsed, full-display System UI
+            // window above the foreground app. It has no visible target, but
+            // its layer would otherwise steal every coordinate from the app.
+            // Keep real bars with bounded geometry and any active/focused
+            // full-display surface, such as the expanded notification shade.
+            if (!window.isActive() && !window.isFocused()
+                    && coversDisplay(windowBounds, width, height)) {
+                continue;
+            }
             if (window.isFocused() && windowPackage != null) focusedPackage = windowPackage;
             if (windowPackage != null && validBounds(windowBounds, width, height)) {
                 regions.add(new Region(windowBounds, windowPackage, window.getLayer(), 0,
@@ -248,7 +257,7 @@ final class UiSemanticsSnapshot {
             boolean editable = node.isEditable();
             boolean interactive = node.isClickable() || node.isLongClickable()
                     || node.isScrollable() || node.isCheckable() || editable
-                    || node.isFocusable();
+                    || node.isDismissable();
             boolean meaningful = interactive || node.isFocused()
                     || !TextUtils.isEmpty(node.getText())
                     || !TextUtils.isEmpty(node.getContentDescription())
@@ -267,6 +276,11 @@ final class UiSemanticsSnapshot {
             }
         }
         return visited;
+    }
+
+    private static boolean coversDisplay(Rect bounds, int width, int height) {
+        return bounds.left <= 0 && bounds.top <= 0
+                && bounds.right >= width && bounds.bottom >= height;
     }
 
     private static JSONObject nodeJson(AccessibilityNodeInfo node, Rect nodeBounds,
