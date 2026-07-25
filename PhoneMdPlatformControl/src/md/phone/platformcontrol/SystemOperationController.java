@@ -1,6 +1,8 @@
 package md.phone.platformcontrol;
 
 import android.app.PendingIntent;
+import android.app.ActivityManager;
+import android.app.ApplicationExitInfo;
 import android.app.role.RoleManager;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
@@ -13,6 +15,8 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.PermissionInfo;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.IPackageDataObserver;
 import android.net.TetheringManager;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
@@ -47,12 +51,16 @@ final class SystemOperationController {
     private static final String TAG = "PhoneMdSystemControl";
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String BROKER_PACKAGE = "md.phone.platformcontrol";
+    private static final String GOOGLE_PLAY_SERVICES_PACKAGE = "com.google.android.gms";
+    private static final String GOOGLE_PLAY_STORE_PACKAGE = "com.android.vending";
     private static final String STATUS_OK = "ok";
     private static final String STATUS_INVALID = "invalid";
     private static final String STATUS_DENIED = "denied";
     private static final String STATUS_NOT_FOUND = "not_found";
     private static final String STATUS_ERROR = "error";
     private static final long PACKAGE_TIMEOUT_MS = 120_000L;
+    private static final long CLEAR_DATA_TIMEOUT_MS = 60_000L;
+    private static final long BOOT_START_TOLERANCE_MS = 10_000L;
     private static final long RADIO_TIMEOUT_MS = 30_000L;
     private static final long MAX_APK_BYTES = 2L * 1024 * 1024 * 1024;
 
@@ -80,6 +88,8 @@ final class SystemOperationController {
             switch (operation) {
                 case "package_install": outcome = install(requestId, operation, request); break;
                 case "package_uninstall": outcome = uninstall(requestId, operation, request); break;
+                case "google_play_health": outcome = googlePlayHealth(requestId, operation); break;
+                case "google_play_reset": outcome = googlePlayReset(requestId, operation); break;
                 case "grant_runtime_permission": outcome = permission(requestId, operation, request, true); break;
                 case "revoke_runtime_permission": outcome = permission(requestId, operation, request, false); break;
                 case "set_default_role": outcome = setDefaultRole(requestId, operation, request); break;
@@ -181,6 +191,64 @@ final class SystemOperationController {
         answer.putString("target", packageName);
         answer.putString("before", "installed");
         answer.putString("after", absent ? "absent" : "installed");
+        return answer;
+    }
+
+    private Bundle googlePlayHealth(String requestId, String operation) throws Exception {
+        if (!isInstalled(GOOGLE_PLAY_SERVICES_PACKAGE)
+                || !isInstalled(GOOGLE_PLAY_STORE_PACKAGE)) {
+            return result(requestId, operation, STATUS_NOT_FOUND,
+                    "Google Play services and Google Play Store are not both installed.");
+        }
+        if (!isOrdinaryApp(GOOGLE_PLAY_SERVICES_PACKAGE)
+                || !isOrdinaryApp(GOOGLE_PLAY_STORE_PACKAGE)) {
+            return result(requestId, operation, STATUS_DENIED,
+                    "The installed Google packages are not both ordinary sandboxed apps.");
+        }
+
+        ActivityManager activity = mContext.getSystemService(ActivityManager.class);
+        int servicesCrashes = currentBootCrashes(activity, GOOGLE_PLAY_SERVICES_PACKAGE);
+        int storeCrashes = currentBootCrashes(activity, GOOGLE_PLAY_STORE_PACKAGE);
+        boolean healthy = servicesCrashes == 0 && storeCrashes == 0;
+        Bundle values = new Bundle();
+        values.putBoolean("healthy", healthy);
+        values.putInt("play_services_crashes_this_boot", servicesCrashes);
+        values.putInt("play_store_crashes_this_boot", storeCrashes);
+        Bundle answer = result(requestId, operation, STATUS_OK,
+                healthy ? "Google Play has no current-boot crash."
+                        : "A Google Play process crashed during this boot.");
+        answer.putString("target", "sandboxed_google_play");
+        answer.putString("after", healthy ? "healthy" : "crashed_this_boot");
+        answer.putBundle("values", values);
+        return answer;
+    }
+
+    private Bundle googlePlayReset(String requestId, String operation) throws Exception {
+        if (!isInstalled(GOOGLE_PLAY_SERVICES_PACKAGE)
+                || !isInstalled(GOOGLE_PLAY_STORE_PACKAGE)) {
+            return result(requestId, operation, STATUS_NOT_FOUND,
+                    "Google Play services and Google Play Store are not both installed.");
+        }
+        if (!isOrdinaryApp(GOOGLE_PLAY_SERVICES_PACKAGE)
+                || !isOrdinaryApp(GOOGLE_PLAY_STORE_PACKAGE)) {
+            return result(requestId, operation, STATUS_DENIED,
+                    "The installed Google packages are not both ordinary sandboxed apps.");
+        }
+
+        ClearDataOutcome store = clearUserData(GOOGLE_PLAY_STORE_PACKAGE);
+        ClearDataOutcome services = clearUserData(GOOGLE_PLAY_SERVICES_PACKAGE);
+        boolean cleared = store.success && services.success;
+        Bundle values = new Bundle();
+        values.putBoolean("play_store_cleared", store.success);
+        values.putBoolean("play_services_cleared", services.success);
+        Bundle answer = result(requestId, operation, cleared ? STATUS_OK : STATUS_ERROR,
+                cleared
+                        ? "Reset sandboxed Google Play. Google accounts must sign in again."
+                        : "Google Play reset did not clear both app states.");
+        answer.putString("target", "sandboxed_google_play");
+        answer.putString("before", "installed_state");
+        answer.putString("after", cleared ? "signed_out_clean_state" : "partially_cleared");
+        answer.putBundle("values", values);
         return answer;
     }
 
@@ -499,6 +567,44 @@ final class SystemOperationController {
         }
     }
 
+    private boolean isOrdinaryApp(String packageName) throws PackageManager.NameNotFoundException {
+        ApplicationInfo info = mPackages.getApplicationInfo(packageName, 0);
+        return (info.flags & ApplicationInfo.FLAG_SYSTEM) == 0;
+    }
+
+    private int currentBootCrashes(ActivityManager activity, String packageName) {
+        long bootStartedAt = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+                - BOOT_START_TOLERANCE_MS;
+        int crashes = 0;
+        List<ApplicationExitInfo> exits =
+                activity.getHistoricalProcessExitReasons(packageName, 0, 32);
+        for (ApplicationExitInfo exit : exits) {
+            if (exit.getTimestamp() < bootStartedAt) continue;
+            int reason = exit.getReason();
+            if (reason == ApplicationExitInfo.REASON_CRASH
+                    || reason == ApplicationExitInfo.REASON_CRASH_NATIVE
+                    || reason == ApplicationExitInfo.REASON_ANR) {
+                crashes++;
+            }
+        }
+        return crashes;
+    }
+
+    private ClearDataOutcome clearUserData(String packageName) throws InterruptedException {
+        ActivityManager activity = mContext.getSystemService(ActivityManager.class);
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicBoolean callbackSuccess = new AtomicBoolean(false);
+        IPackageDataObserver observer = new IPackageDataObserver.Stub() {
+            @Override public void onRemoveCompleted(String observedPackage, boolean succeeded) {
+                callbackSuccess.set(packageName.equals(observedPackage) && succeeded);
+                finished.countDown();
+            }
+        };
+        boolean started = activity.clearApplicationUserData(packageName, observer);
+        boolean returned = started && finished.await(CLEAR_DATA_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        return new ClearDataOutcome(returned && callbackSuccess.get());
+    }
+
     private String checkedPackage(String value) {
         if (value == null || !value.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) return null;
         return value;
@@ -608,6 +714,14 @@ final class SystemOperationController {
             this.success = success;
             this.packageName = packageName;
             this.message = message;
+        }
+    }
+
+    private static final class ClearDataOutcome {
+        final boolean success;
+
+        ClearDataOutcome(boolean success) {
+            this.success = success;
         }
     }
 }
