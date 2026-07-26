@@ -23,12 +23,18 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.nfc.NfcAdapter;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.text.TextUtils;
+import android.telephony.ServiceState;
+import android.telephony.SubscriptionInfo;
+import android.telephony.SubscriptionManager;
+import android.telephony.TelephonyManager;
+import android.telephony.euicc.EuiccManager;
 import android.util.Slog;
 
 import java.io.FileInputStream;
@@ -94,6 +100,7 @@ final class SystemOperationController {
                 case "revoke_runtime_permission": outcome = permission(requestId, operation, request, false); break;
                 case "set_default_role": outcome = setDefaultRole(requestId, operation, request); break;
                 case "get_default_role": outcome = getDefaultRole(requestId, operation, request); break;
+                case "telephony_snapshot": outcome = telephonySnapshot(requestId, operation); break;
                 case "lock": outcome = power(requestId, operation); break;
                 case "reboot": outcome = power(requestId, operation); break;
                 case "shutdown": outcome = power(requestId, operation); break;
@@ -121,6 +128,193 @@ final class SystemOperationController {
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
+    }
+
+    /**
+     * One read-only platform snapshot for facts that ordinary app sandboxes
+     * cannot see. Values are namespaced so HOME can split telephony state from
+     * persistent identifiers without adding another privileged API.
+     */
+    private Bundle telephonySnapshot(String requestId, String operation) {
+        TelephonyManager phones = mContext.getSystemService(TelephonyManager.class);
+        SubscriptionManager subscriptions = mContext.getSystemService(SubscriptionManager.class);
+        Bundle values = new Bundle();
+
+        int modemCount = Math.max(phones.getActiveModemCount(), phones.getPhoneCount());
+        values.putInt("telephony.active_modem_count", phones.getActiveModemCount());
+        values.putInt("telephony.phone_count", phones.getPhoneCount());
+        values.putInt("telephony.default_subscription_id",
+                SubscriptionManager.getDefaultSubscriptionId());
+        values.putInt("telephony.default_voice_subscription_id",
+                SubscriptionManager.getDefaultVoiceSubscriptionId());
+        values.putInt("telephony.default_sms_subscription_id",
+                SubscriptionManager.getDefaultSmsSubscriptionId());
+        values.putInt("telephony.default_data_subscription_id",
+                SubscriptionManager.getDefaultDataSubscriptionId());
+
+        putString(values, "identifiers.device_serial", readString(Build::getSerial));
+        for (int slot = 0; slot < modemCount; slot++) {
+            final int currentSlot = slot;
+            String slotKey = "slot_" + slot;
+            values.putString("telephony." + slotKey + ".sim_state",
+                    simStateName(phones.getSimState(slot)));
+            putString(values, "identifiers." + slotKey + ".imei",
+                    readString(() -> phones.getImei(currentSlot)));
+            putString(values, "identifiers." + slotKey + ".meid",
+                    readString(() -> phones.getMeid(currentSlot)));
+        }
+
+        List<SubscriptionInfo> active = subscriptions.getActiveSubscriptionInfoList();
+        if (active == null) active = new ArrayList<>();
+        values.putInt("telephony.active_subscription_count", active.size());
+        for (int index = 0; index < active.size(); index++) {
+            SubscriptionInfo info = active.get(index);
+            int subId = info.getSubscriptionId();
+            TelephonyManager phone = phones.createForSubscriptionId(subId);
+            String key = "subscription_" + index;
+            String telephonyPrefix = "telephony." + key + ".";
+            String identifierPrefix = "identifiers." + key + ".";
+
+            values.putInt(telephonyPrefix + "subscription_id", subId);
+            values.putInt(telephonyPrefix + "sim_slot_index", info.getSimSlotIndex());
+            values.putInt(telephonyPrefix + "carrier_id", info.getCarrierId());
+            putString(values, telephonyPrefix + "display_name",
+                    info.getDisplayName() == null ? "" : info.getDisplayName().toString());
+            putString(values, telephonyPrefix + "carrier_name",
+                    info.getCarrierName() == null ? "" : info.getCarrierName().toString());
+            putString(values, telephonyPrefix + "country_iso", info.getCountryIso());
+            putString(values, telephonyPrefix + "mcc", info.getMccString());
+            putString(values, telephonyPrefix + "mnc", info.getMncString());
+            values.putBoolean(telephonyPrefix + "embedded_esim", info.isEmbedded());
+            values.putBoolean(telephonyPrefix + "opportunistic", info.isOpportunistic());
+            values.putBoolean(telephonyPrefix + "network_roaming", phone.isNetworkRoaming());
+            putString(values, telephonyPrefix + "network_operator_name",
+                    phone.getNetworkOperatorName());
+            putString(values, telephonyPrefix + "network_operator", phone.getNetworkOperator());
+            putString(values, telephonyPrefix + "network_country_iso",
+                    phone.getNetworkCountryIso());
+            putString(values, telephonyPrefix + "sim_operator_name", phone.getSimOperatorName());
+            putString(values, telephonyPrefix + "sim_operator", phone.getSimOperator());
+            putString(values, telephonyPrefix + "sim_country_iso", phone.getSimCountryIso());
+            putString(values, telephonyPrefix + "data_network_type",
+                    TelephonyManager.getNetworkTypeName(phone.getDataNetworkType()));
+            putString(values, telephonyPrefix + "voice_network_type",
+                    TelephonyManager.getNetworkTypeName(phone.getVoiceNetworkType()));
+            putString(values, telephonyPrefix + "data_state", dataStateName(phone.getDataState()));
+            putString(values, telephonyPrefix + "call_state", callStateName(phone.getCallState()));
+            ServiceState service = phone.getServiceState();
+            if (service != null) {
+                putString(values, telephonyPrefix + "service_state",
+                        serviceStateName(service.getState()));
+                values.putBoolean(telephonyPrefix + "service_roaming", service.getRoaming());
+                putString(values, telephonyPrefix + "operator_alpha_long",
+                        service.getOperatorAlphaLong());
+                putString(values, telephonyPrefix + "operator_alpha_short",
+                        service.getOperatorAlphaShort());
+                putString(values, telephonyPrefix + "operator_numeric",
+                        service.getOperatorNumeric());
+            }
+
+            putString(values, telephonyPrefix + "phone_number",
+                    readString(() -> subscriptions.getPhoneNumber(subId)));
+            putString(values, telephonyPrefix + "phone_number_carrier",
+                    readString(() -> subscriptions.getPhoneNumber(
+                            subId, SubscriptionManager.PHONE_NUMBER_SOURCE_CARRIER)));
+            putString(values, telephonyPrefix + "phone_number_uicc",
+                    readString(() -> subscriptions.getPhoneNumber(
+                            subId, SubscriptionManager.PHONE_NUMBER_SOURCE_UICC)));
+            putString(values, telephonyPrefix + "phone_number_ims",
+                    readString(() -> subscriptions.getPhoneNumber(
+                            subId, SubscriptionManager.PHONE_NUMBER_SOURCE_IMS)));
+            putString(values, telephonyPrefix + "phone_number_source_priority",
+                    "carrier>uicc>ims");
+
+            putString(values, identifierPrefix + "iccid", info.getIccId());
+            putString(values, identifierPrefix + "group_uuid",
+                    info.getGroupUuid() == null ? "" : info.getGroupUuid().toString());
+            putString(values, identifierPrefix + "imsi",
+                    readString(phone::getSubscriberId));
+            putString(values, identifierPrefix + "sim_serial_number",
+                    readString(phone::getSimSerialNumber));
+        }
+
+        EuiccManager euicc = mContext.getSystemService(EuiccManager.class);
+        if (euicc != null) {
+            values.putBoolean("telephony.esim_enabled", euicc.isEnabled());
+            putString(values, "identifiers.esim_eid", readString(euicc::getEid));
+        }
+
+        Bundle answer = result(requestId, operation, STATUS_OK,
+                "Read protected telephony and subscription state.");
+        answer.putString("target", "phone_system");
+        answer.putBundle("values", values);
+        return answer;
+    }
+
+    private static String readString(StringReader reader) {
+        try {
+            String value = reader.read();
+            return value == null ? "" : value;
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static void putString(Bundle values, String key, String value) {
+        values.putString(key, value == null ? "" : value);
+    }
+
+    private static String simStateName(int state) {
+        switch (state) {
+            case TelephonyManager.SIM_STATE_ABSENT: return "absent";
+            case TelephonyManager.SIM_STATE_PIN_REQUIRED: return "pin_required";
+            case TelephonyManager.SIM_STATE_PUK_REQUIRED: return "puk_required";
+            case TelephonyManager.SIM_STATE_NETWORK_LOCKED: return "network_locked";
+            case TelephonyManager.SIM_STATE_READY: return "ready";
+            case TelephonyManager.SIM_STATE_NOT_READY: return "not_ready";
+            case TelephonyManager.SIM_STATE_PERM_DISABLED: return "permanently_disabled";
+            case TelephonyManager.SIM_STATE_CARD_IO_ERROR: return "card_io_error";
+            case TelephonyManager.SIM_STATE_CARD_RESTRICTED: return "card_restricted";
+            case TelephonyManager.SIM_STATE_LOADED: return "loaded";
+            case TelephonyManager.SIM_STATE_PRESENT: return "present";
+            default: return "unknown";
+        }
+    }
+
+    private static String dataStateName(int state) {
+        switch (state) {
+            case TelephonyManager.DATA_DISCONNECTED: return "disconnected";
+            case TelephonyManager.DATA_CONNECTING: return "connecting";
+            case TelephonyManager.DATA_CONNECTED: return "connected";
+            case TelephonyManager.DATA_SUSPENDED: return "suspended";
+            case TelephonyManager.DATA_DISCONNECTING: return "disconnecting";
+            case TelephonyManager.DATA_HANDOVER_IN_PROGRESS: return "handover";
+            default: return "unknown";
+        }
+    }
+
+    private static String callStateName(int state) {
+        switch (state) {
+            case TelephonyManager.CALL_STATE_IDLE: return "idle";
+            case TelephonyManager.CALL_STATE_RINGING: return "ringing";
+            case TelephonyManager.CALL_STATE_OFFHOOK: return "off_hook";
+            default: return "unknown";
+        }
+    }
+
+    private static String serviceStateName(int state) {
+        switch (state) {
+            case ServiceState.STATE_IN_SERVICE: return "in_service";
+            case ServiceState.STATE_OUT_OF_SERVICE: return "out_of_service";
+            case ServiceState.STATE_EMERGENCY_ONLY: return "emergency_only";
+            case ServiceState.STATE_POWER_OFF: return "power_off";
+            default: return "unknown";
+        }
+    }
+
+    @FunctionalInterface
+    private interface StringReader {
+        String read();
     }
 
     private Bundle install(String requestId, String operation, Bundle request) throws Exception {

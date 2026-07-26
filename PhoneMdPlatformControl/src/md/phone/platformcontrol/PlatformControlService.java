@@ -137,6 +137,7 @@ public final class PlatformControlService extends Service {
             result.putBoolean("copilot_overlay", true);
             result.putBoolean("financial_package_boundary", true);
             result.putBoolean("system_operations", true);
+            result.putBoolean("system_data", true);
             result.putBoolean("package_management", true);
             result.putBoolean("connectivity_management", true);
             result.putBoolean("power_control", true);

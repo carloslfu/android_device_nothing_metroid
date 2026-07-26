@@ -15,5 +15,6 @@
         <permission name="android.permission.TETHER_PRIVILEGED" />
         <permission name="android.permission.WRITE_SECURE_SETTINGS" />
         <permission name="android.permission.BLUETOOTH_PRIVILEGED" />
+        <permission name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
     </privapp-permissions>
 </permissions>
