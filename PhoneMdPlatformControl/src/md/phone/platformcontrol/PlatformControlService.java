@@ -37,6 +37,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.WindowManagerGlobal;
 import android.widget.Button;
@@ -332,8 +333,8 @@ public final class PlatformControlService extends Service {
 
             final String before = foregroundPackage();
             if (before == null) {
-                return timed(baseResult(requestId, STATUS_DENIED,
-                        "The foreground app could not be verified."), started);
+                return timed(actionResult(requestId, STATUS_DENIED,
+                        "The foreground app could not be verified.", action), started);
             }
             if (isFinancialPackage(before)) {
                 returnHome();
@@ -345,24 +346,24 @@ public final class PlatformControlService extends Service {
             }
             final String frameToken = request.getString("frame_token");
             if (!validFrameToken(frameToken)) {
-                return timed(baseResult(requestId, STATUS_DENIED,
-                        "Input requires the exact captured visual frame."), started);
+                return timed(actionResult(requestId, STATUS_DENIED,
+                        "Input requires the exact captured visual frame.", action), started);
             }
             final FrameContext frame = consumeFrameContext(frameToken);
             if (frame == null) {
-                return timed(baseResult(requestId, STATUS_DENIED,
-                        "The visual frame expired; capture the screen again."), started);
+                return timed(actionResult(requestId, STATUS_DENIED,
+                        "The visual frame expired; capture the screen again.", action), started);
             }
             final String rawFrameSha256 = request.getString("frame_sha256");
             final String frameSha256 = rawFrameSha256 != null
                     && rawFrameSha256.length() == 64 ? safeLower(rawFrameSha256) : "";
             if (!isSha256(frameSha256) || !frame.sha256.equals(frameSha256)) {
-                return timed(baseResult(requestId, STATUS_DENIED,
-                        "Input did not match the exact captured image digest."), started);
+                return timed(actionResult(requestId, STATUS_DENIED,
+                        "Input did not match the exact captured image digest.", action), started);
             }
             if (!before.equals(frame.foregroundPackage)) {
-                Bundle denied = baseResult(requestId, STATUS_DENIED,
-                        "The foreground changed after the visual frame; capture again.");
+                Bundle denied = actionResult(requestId, STATUS_DENIED,
+                        "The foreground changed after the visual frame; capture again.", action);
                 denied.putString("foreground_before", before);
                 denied.putString("frame_foreground", frame.foregroundPackage);
                 return timed(denied, started);
@@ -375,8 +376,8 @@ public final class PlatformControlService extends Service {
             final String liveForeground = foregroundPackage();
             if (!liveSemantics.available || liveForeground == null
                     || !before.equals(liveForeground)) {
-                Bundle denied = baseResult(requestId, STATUS_DENIED,
-                        "The visible Android target changed after capture; capture again.");
+                Bundle denied = actionResult(requestId, STATUS_DENIED,
+                        "The visible Android target changed after capture; capture again.", action);
                 denied.putString("foreground_before", before);
                 denied.putString("foreground_after", liveForeground);
                 return timed(denied, started);
@@ -423,8 +424,8 @@ public final class PlatformControlService extends Service {
             try {
                 targetUid = getPackageManager().getApplicationInfo(targetPackage, 0).uid;
             } catch (PackageManager.NameNotFoundException error) {
-                return timed(baseResult(requestId, STATUS_DENIED,
-                        "The visible input target identity could not be resolved."), started);
+                return timed(actionResult(requestId, STATUS_DENIED,
+                        "The visible input target identity could not be resolved.", action), started);
             }
 
             final long identity = Binder.clearCallingIdentity();
@@ -473,11 +474,12 @@ public final class PlatformControlService extends Service {
                 result.putBoolean("live_target_checked", true);
                 return timed(result, started);
             } catch (IllegalArgumentException error) {
-                return timed(baseResult(requestId, STATUS_INVALID, error.getMessage()), started);
+                return timed(actionResult(
+                        requestId, STATUS_INVALID, error.getMessage(), action), started);
             } catch (Throwable error) {
                 Slog.e(TAG, "Input action failed", error);
-                return timed(baseResult(requestId, STATUS_ERROR,
-                        "Input failed: " + error.getClass().getSimpleName()), started);
+                return timed(actionResult(requestId, STATUS_ERROR,
+                        "Input failed: " + error.getClass().getSimpleName(), action), started);
             } finally {
                 Binder.restoreCallingIdentity(identity);
             }
@@ -1221,6 +1223,7 @@ public final class PlatformControlService extends Service {
                         windowFlags,
                         PixelFormat.TRANSLUCENT);
                 params.gravity = android.view.Gravity.TOP;
+                params.y = statusBarInsetTop();
                 params.setTitle("phone.md co-pilot");
                 if (!confirmation) {
                     params.alpha = PROGRESS_OVERLAY_WINDOW_ALPHA;
@@ -1490,12 +1493,31 @@ public final class PlatformControlService extends Service {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private int statusBarInsetTop() {
+        try {
+            WindowInsets insets =
+                    mWindowManager.getCurrentWindowMetrics().getWindowInsets();
+            return Math.max(0, insets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.statusBars()).top);
+        } catch (Throwable error) {
+            Slog.w(TAG, "Could not read the status-bar inset", error);
+            return 0;
+        }
+    }
+
     private static Bundle baseResult(String requestId, String status, String detail) {
         Bundle result = new Bundle();
         result.putInt("protocol_version", PROTOCOL_VERSION);
         result.putString("request_id", requestId);
         result.putString("status", status);
         result.putString("detail", detail);
+        return result;
+    }
+
+    private static Bundle actionResult(
+            String requestId, String status, String detail, String action) {
+        Bundle result = baseResult(requestId, status, detail);
+        result.putString("action", action);
         return result;
     }
 
