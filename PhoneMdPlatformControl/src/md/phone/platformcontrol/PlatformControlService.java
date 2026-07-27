@@ -24,6 +24,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
+import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Slog;
 import android.view.Display;
@@ -1122,7 +1123,6 @@ public final class PlatformControlService extends Service {
         }
         try {
             ApplicationInfo app = getPackageManager().getApplicationInfo(packageName, 0);
-            if (app.category == ApplicationInfo.CATEGORY_FINANCE) return true;
             String label = String.valueOf(getPackageManager().getApplicationLabel(app));
             String normalizedLabel = normalize(label);
             for (String token : FINANCIAL_LABEL_TOKENS) {
