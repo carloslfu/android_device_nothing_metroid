@@ -82,6 +82,7 @@ final class SystemOperationController {
     private static final int MAX_MODEMS = 8;
     private static final int MAX_SUBSCRIPTIONS = 16;
     private static final int MAX_CLIPBOARD_TEXT_CHARS = 128 * 1024;
+    private static final Object PACKAGE_INSTALL_LOCK = new Object();
 
     private final Context mContext;
     private final PackageManager mPackages;
@@ -338,6 +339,13 @@ final class SystemOperationController {
     }
 
     private Bundle install(String requestId, String operation, Bundle request) throws Exception {
+        synchronized (PACKAGE_INSTALL_LOCK) {
+            return installLocked(requestId, operation, request);
+        }
+    }
+
+    private Bundle installLocked(String requestId, String operation, Bundle request)
+            throws Exception {
         ParcelFileDescriptor descriptor = request.getParcelable("apk_fd", ParcelFileDescriptor.class);
         long size = request.getLong("apk_size", -1);
         String expectedHash = lower(request.getString("apk_sha256"));
@@ -352,6 +360,7 @@ final class SystemOperationController {
         int sessionId = -1;
         AtomicBoolean submitted = new AtomicBoolean(false);
         try {
+            pruneCheckedApks(mContext.getCacheDir());
             checkedApk = File.createTempFile(
                     "phone-md-install-", ".apk", mContext.getCacheDir());
             MessageDigest receivedDigest = MessageDigest.getInstance("SHA-256");
@@ -452,6 +461,18 @@ final class SystemOperationController {
                         checkedApk.deleteOnExit();
                     }
                 }
+            }
+        }
+    }
+
+    private static void pruneCheckedApks(File cacheDir) {
+        File[] files = cacheDir.listFiles();
+        if (files == null) return;
+        for (File file : files) {
+            String name = file.getName();
+            if (name.startsWith("phone-md-install-") && name.endsWith(".apk")
+                    && file.isFile() && !file.delete()) {
+                Slog.w(TAG, "Could not remove abandoned checked APK " + name);
             }
         }
     }
