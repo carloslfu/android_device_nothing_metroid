@@ -4,9 +4,14 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.UiAutomation;
 import android.app.UiAutomationConnection;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.text.InputType;
 import android.util.Slog;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -18,6 +23,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.text.Normalizer;
 
 /**
  * One bounded accessibility snapshot captured alongside a display frame.
@@ -30,6 +36,7 @@ final class UiSemanticsSnapshot {
     private static final String TAG = "PhoneMdUiSemantics";
     private static final String BROKER_PACKAGE = "md.phone.platformcontrol";
     private static final int MAX_NODES = 480;
+    private static final int MAX_WINDOWS = 32;
     private static final int MAX_TEXT_CHARS = 240;
     private static final int MAX_JSON_CHARS = 48_000;
     private static final long CONNECT_SETTLE_MILLIS = 80;
@@ -42,9 +49,11 @@ final class UiSemanticsSnapshot {
         final boolean interactive;
         final boolean scrollable;
         final boolean focused;
+        final boolean privateInput;
+        final String identity;
 
         Region(Rect bounds, String packageName, int layer, int depth, boolean interactive,
-                boolean scrollable, boolean focused) {
+                boolean scrollable, boolean focused, boolean privateInput, String identity) {
             this.bounds = new Rect(bounds);
             this.packageName = packageName;
             this.layer = layer;
@@ -52,6 +61,8 @@ final class UiSemanticsSnapshot {
             this.interactive = interactive;
             this.scrollable = scrollable;
             this.focused = focused;
+            this.privateInput = privateInput;
+            this.identity = identity;
         }
 
         long area() {
@@ -62,10 +73,12 @@ final class UiSemanticsSnapshot {
     private static final class PendingNode {
         final AccessibilityNodeInfo node;
         final int depth;
+        final boolean privateAncestor;
 
-        PendingNode(AccessibilityNodeInfo node, int depth) {
+        PendingNode(AccessibilityNodeInfo node, int depth, boolean privateAncestor) {
             this.node = node;
             this.depth = depth;
+            this.privateAncestor = privateAncestor;
         }
     }
 
@@ -115,7 +128,10 @@ final class UiSemanticsSnapshot {
                 }
                 return fromSingleRoot(root, width, height);
             }
-            windows.sort(Comparator.comparingInt(AccessibilityWindowInfo::getLayer));
+            // Start with the top/focused surface. A large background hierarchy
+            // must never consume the node budget before a visible password,
+            // SystemUI control, or foreground target can be classified.
+            windows.sort(Comparator.comparingInt(AccessibilityWindowInfo::getLayer).reversed());
             return fromWindows(windows, width, height);
         } catch (Throwable error) {
             Slog.w(TAG, "Could not capture UI semantics", error);
@@ -138,6 +154,66 @@ final class UiSemanticsSnapshot {
     }
 
     String packageAt(int x, int y, String fallbackPackage, boolean preferScrollable) {
+        Region target = regionAt(x, y, preferScrollable);
+        return target == null || target.packageName == null
+                ? fallbackPackage : target.packageName;
+    }
+
+    String identityAt(int x, int y, String fallbackPackage, boolean preferScrollable) {
+        Region target = regionAt(x, y, preferScrollable);
+        return target == null ? "window|" + fallbackPackage : target.identity;
+    }
+
+    String inputPackage(String fallbackPackage) {
+        return regions.stream()
+                .filter(region -> region.focused && region.interactive
+                        && region.packageName != null)
+                .sorted((left, right) -> {
+                    int layer = Integer.compare(right.layer, left.layer);
+                    if (layer != 0) return layer;
+                    int depth = Integer.compare(right.depth, left.depth);
+                    if (depth != 0) return depth;
+                    return Long.compare(left.area(), right.area());
+                })
+                .map(region -> region.packageName)
+                .findFirst()
+                .orElse(focusedPackage == null ? fallbackPackage : focusedPackage);
+    }
+
+    String focusedIdentity(String fallbackPackage) {
+        return regions.stream()
+                .filter(region -> region.focused && region.identity != null)
+                .sorted((left, right) -> {
+                    if (left.interactive != right.interactive) {
+                        return left.interactive ? -1 : 1;
+                    }
+                    int layer = Integer.compare(right.layer, left.layer);
+                    if (layer != 0) return layer;
+                    int depth = Integer.compare(right.depth, left.depth);
+                    if (depth != 0) return depth;
+                    return Long.compare(left.area(), right.area());
+                })
+                .map(region -> region.identity)
+                .findFirst()
+                .orElse("window|" + fallbackPackage);
+    }
+
+    boolean hasFocusedPrivateInput() {
+        return regions.stream().anyMatch(region -> region.focused && region.privateInput);
+    }
+
+    void redactPrivateInputs(Bitmap bitmap) {
+        if (bitmap == null || !bitmap.isMutable()) return;
+        Paint paint = new Paint();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.BLACK);
+        Canvas canvas = new Canvas(bitmap);
+        regions.stream()
+                .filter(region -> region.privateInput)
+                .forEach(region -> canvas.drawRect(region.bounds, paint));
+    }
+
+    private Region regionAt(int x, int y, boolean preferScrollable) {
         return regions.stream()
                 .filter(region -> region.packageName != null && region.bounds.contains(x, y))
                 .sorted((left, right) -> {
@@ -154,13 +230,8 @@ final class UiSemanticsSnapshot {
                     if (depth != 0) return depth;
                     return Long.compare(left.area(), right.area());
                 })
-                .map(region -> region.packageName)
                 .findFirst()
-                .orElse(fallbackPackage);
-    }
-
-    String inputPackage(String fallbackPackage) {
-        return focusedPackage == null ? fallbackPackage : focusedPackage;
+                .orElse(null);
     }
 
     private static UiSemanticsSnapshot fromWindows(List<AccessibilityWindowInfo> windows,
@@ -169,8 +240,9 @@ final class UiSemanticsSnapshot {
         List<Region> regions = new ArrayList<>();
         String focusedPackage = null;
         int remaining = MAX_NODES;
+        int inspectedWindows = 0;
         for (AccessibilityWindowInfo window : windows) {
-            if (remaining <= 0) break;
+            if (inspectedWindows++ >= MAX_WINDOWS) break;
             AccessibilityNodeInfo root = window.getRoot();
             if (root == null) continue;
             Rect windowBounds = new Rect();
@@ -189,15 +261,20 @@ final class UiSemanticsSnapshot {
                     && coversDisplay(windowBounds, width, height)) {
                 continue;
             }
-            if (window.isFocused() && windowPackage != null) focusedPackage = windowPackage;
+            if (focusedPackage == null && window.isFocused() && windowPackage != null) {
+                focusedPackage = windowPackage;
+            }
             if (windowPackage != null && validBounds(windowBounds, width, height)) {
                 regions.add(new Region(windowBounds, windowPackage, window.getLayer(), 0,
-                        false, false, window.isFocused()));
+                        false, false, window.isFocused(), false,
+                        windowIdentity(windowPackage, windowBounds, window.getLayer())));
             }
 
             JSONArray controls = new JSONArray();
-            int consumed = appendNodes(root, window.getLayer(), width, height, remaining,
-                    controls, regions);
+            int consumed = remaining > 0
+                    ? appendNodes(root, window.getLayer(), width, height, remaining,
+                            controls, regions)
+                    : 0;
             remaining -= consumed;
 
             JSONObject row = new JSONObject();
@@ -236,15 +313,20 @@ final class UiSemanticsSnapshot {
         JSONObject result = new JSONObject();
         result.put("available", true);
         result.put("coordinate_space", coordinateSpace(width, height));
-        result.put("windows", new JSONArray().put(window));
         String packageName = chars(root.getPackageName());
-        return new UiSemanticsSnapshot(true, result.toString(), regions, packageName);
+        JSONArray windows = new JSONArray().put(window);
+        result.put("windows", windows);
+        return new UiSemanticsSnapshot(
+                true,
+                boundedJson(result, windows),
+                regions,
+                packageName);
     }
 
     private static int appendNodes(AccessibilityNodeInfo root, int layer, int width, int height,
             int limit, JSONArray output, List<Region> regions) throws Exception {
         ArrayDeque<PendingNode> queue = new ArrayDeque<>();
-        queue.add(new PendingNode(root, 0));
+        queue.add(new PendingNode(root, 0, false));
         int visited = 0;
         while (!queue.isEmpty() && visited < limit) {
             PendingNode pending = queue.removeFirst();
@@ -264,15 +346,22 @@ final class UiSemanticsSnapshot {
                     || !TextUtils.isEmpty(node.getHintText());
             if (node.isVisibleToUser() && validBounds(nodeBounds, width, height)
                     && packageName != null) {
+                boolean privateInput = pending.privateAncestor || isPrivateInput(node);
                 regions.add(new Region(nodeBounds, packageName, layer, pending.depth,
-                        interactive, node.isScrollable(), node.isFocused()));
-                if (meaningful) output.put(nodeJson(node, nodeBounds, packageName));
+                        interactive, node.isScrollable(), node.isFocused(), privateInput,
+                        nodeIdentity(node, nodeBounds, packageName, privateInput)));
+                if (meaningful) {
+                    output.put(nodeJson(node, nodeBounds, packageName, privateInput));
+                }
             }
 
+            boolean privateSubtree = pending.privateAncestor || isPrivateInput(node);
             for (int index = 0; index < node.getChildCount() && visited + queue.size() < limit;
                     index++) {
                 AccessibilityNodeInfo child = node.getChild(index);
-                if (child != null) queue.addLast(new PendingNode(child, pending.depth + 1));
+                if (child != null) {
+                    queue.addLast(new PendingNode(child, pending.depth + 1, privateSubtree));
+                }
             }
         }
         return visited;
@@ -284,11 +373,11 @@ final class UiSemanticsSnapshot {
     }
 
     private static JSONObject nodeJson(AccessibilityNodeInfo node, Rect nodeBounds,
-            String packageName) throws Exception {
+            String packageName, boolean privateInput) throws Exception {
         JSONObject row = new JSONObject();
         row.put("package", packageName);
         row.put("role", bounded(chars(node.getClassName())));
-        if (node.isPassword()) {
+        if (privateInput) {
             row.put("private_input", true);
         } else {
             putIfPresent(row, "text", chars(node.getText()));
@@ -351,20 +440,138 @@ final class UiSemanticsSnapshot {
 
     private static String boundedJson(JSONObject result, JSONArray windows) throws Exception {
         String json = result.toString();
+        boolean truncated = false;
         while (json.length() > MAX_JSON_CHARS) {
             boolean removed = false;
+            // Windows are sorted from the highest layer to the lowest. Drop
+            // background controls and windows first so the focused surface
+            // remains useful instead of being the first data cut.
             for (int index = windows.length() - 1; index >= 0; index--) {
                 JSONArray controls = windows.getJSONObject(index).getJSONArray("controls");
                 if (controls.length() > 0) {
                     controls.remove(controls.length() - 1);
                     removed = true;
+                    truncated = true;
                     break;
                 }
             }
+            if (!removed && windows.length() > 1) {
+                windows.remove(windows.length() - 1);
+                removed = true;
+                truncated = true;
+            }
             if (!removed) break;
+            if (truncated) result.put("truncated", true);
+            json = result.toString();
+        }
+        if (json.length() > MAX_JSON_CHARS) {
+            result.put("windows", new JSONArray());
+            result.put("truncated", true);
             json = result.toString();
         }
         return json;
+    }
+
+    private static boolean isPrivateInput(AccessibilityNodeInfo node) {
+        if (node.isPassword()) return true;
+        int variation = node.getInputType()
+                & (InputType.TYPE_MASK_CLASS | InputType.TYPE_MASK_VARIATION);
+        if (variation == (InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD)
+                || variation == (InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
+                || variation == (InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
+                || variation == (InputType.TYPE_CLASS_NUMBER
+                | InputType.TYPE_NUMBER_VARIATION_PASSWORD)) {
+            return true;
+        }
+        if (!node.isEditable()) return false;
+        String metadata = Normalizer.normalize((
+                chars(node.getViewIdResourceName()) + " "
+                        + chars(node.getHintText()) + " "
+                        + chars(node.getContentDescription()))
+                .toLowerCase(java.util.Locale.ROOT), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .replaceAll("[^a-z0-9]+", " ");
+        String padded = " " + metadata + " ";
+        return padded.contains(" password ")
+                || padded.contains(" passcode ")
+                || padded.contains(" one time ")
+                || padded.contains(" otp ")
+                || padded.contains(" verification code ")
+                || padded.contains(" security code ")
+                || padded.contains(" card number ")
+                || padded.contains(" cvv ")
+                || padded.contains(" cvc ")
+                || padded.contains(" pin ")
+                || padded.contains(" contrasena ")
+                || padded.contains(" clave ")
+                || padded.contains(" codigo de verificacion ")
+                || padded.contains(" codigo de seguridad ")
+                || padded.contains(" numero de tarjeta ")
+                || padded.contains(" nip ");
+    }
+
+    private static String windowIdentity(String packageName, Rect bounds, int layer) {
+        return "window|" + packageName + "|" + layer + "|" + bounds.flattenToString();
+    }
+
+    private static String nodeIdentity(
+            AccessibilityNodeInfo node,
+            Rect bounds,
+            String packageName,
+            boolean privateInput) {
+        StringBuilder identity = new StringBuilder("node|")
+                .append(packageName).append('|')
+                .append(bounded(chars(node.getClassName()))).append('|')
+                .append(bounded(node.getViewIdResourceName())).append('|')
+                .append(bounds.flattenToString()).append('|')
+                .append(node.isClickable()).append('|')
+                .append(node.isEditable()).append('|')
+                .append(node.isScrollable()).append('|')
+                .append(privateInput);
+        if (privateInput) {
+            identity.append("|private");
+        } else {
+            identity.append('|').append(bounded(chars(node.getText())))
+                    .append('|').append(bounded(chars(node.getContentDescription())))
+                    .append('|').append(bounded(chars(node.getHintText())))
+                    .append('|').append(descendantLabel(node));
+        }
+        return identity.toString();
+    }
+
+    private static String descendantLabel(AccessibilityNodeInfo root) {
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        for (int index = 0; index < root.getChildCount(); index++) {
+            AccessibilityNodeInfo child = root.getChild(index);
+            if (child != null) queue.addLast(child);
+        }
+        StringBuilder label = new StringBuilder();
+        int visited = 0;
+        while (!queue.isEmpty() && visited < 24 && label.length() < 960) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            visited++;
+            boolean privateNode = isPrivateInput(node);
+            if (!privateNode) {
+                appendIdentityText(label, chars(node.getText()));
+                appendIdentityText(label, chars(node.getContentDescription()));
+                appendIdentityText(label, chars(node.getHintText()));
+                for (int index = 0; index < node.getChildCount()
+                        && visited + queue.size() < 24; index++) {
+                    AccessibilityNodeInfo child = node.getChild(index);
+                    if (child != null) queue.addLast(child);
+                }
+            }
+        }
+        return bounded(label.toString());
+    }
+
+    private static void appendIdentityText(StringBuilder target, String value) {
+        String checked = bounded(value);
+        if (checked.isEmpty()) return;
+        if (target.length() > 0) target.append(' ');
+        target.append(checked);
     }
 
     private static String chars(CharSequence value) {

@@ -55,6 +55,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -76,8 +77,9 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 6;
+    private static final int PROTOCOL_VERSION = 7;
     private static final int MAX_TEXT_LENGTH = 20_000;
+    private static final int MAX_KEY_LENGTH = 64;
     private static final int MAX_PATH_POINTS = 128;
     private static final int GESTURE_DURATION_MILLIS = 300;
     private static final int GESTURE_EVENT_HZ = 120;
@@ -132,6 +134,10 @@ public final class PlatformControlService extends Service {
             result.putBoolean("input", true);
             result.putBoolean("ui_semantics", true);
             result.putBoolean("frame_locked_input", true);
+            result.putBoolean("frame_digest_locked_input", true);
+            result.putBoolean("live_target_locked_input", true);
+            result.putBoolean("private_input_guard", true);
+            result.putBoolean("private_input_pixel_redaction", true);
             result.putBoolean("system_surface_input", true);
             result.putBoolean("unicode_text", true);
             result.putBoolean("copilot_overlay", true);
@@ -167,12 +173,28 @@ public final class PlatformControlService extends Service {
 
             final long identity = Binder.clearCallingIdentity();
             String suppressedOverlayOperation = null;
+            File capture = null;
             try {
                 final boolean overlayWasActive = hasOverlay();
                 suppressedOverlayOperation = setOverlayCaptureSuppressed(true, null);
                 if (overlayWasActive && suppressedOverlayOperation == null) {
                     return timed(baseResult(requestId, STATUS_ERROR,
                             "The progress overlay could not be excluded from capture."), started);
+                }
+                final DisplayMetrics expectedMetrics = displayMetrics();
+                final UiSemanticsSnapshot preCaptureSemantics =
+                        UiSemanticsSnapshot.capture(
+                                PlatformControlService.this,
+                                expectedMetrics.widthPixels,
+                                expectedMetrics.heightPixels);
+                final String preCaptureFinancialPackage =
+                        firstFinancialPackage(preCaptureSemantics);
+                if (preCaptureFinancialPackage != null) {
+                    returnHome();
+                    Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
+                            "The visible window belongs to a financial app; returned Home.");
+                    denied.putString("target_package", preCaptureFinancialPackage);
+                    return timed(denied, started);
                 }
                 ScreenCapture.SynchronousScreenCaptureListener listener =
                         ScreenCapture.createSyncCaptureListener();
@@ -191,7 +213,7 @@ public final class PlatformControlService extends Service {
 
                 Bitmap hardwareBitmap = buffer.asBitmap();
                 Bitmap bitmap = hardwareBitmap == null ? null
-                        : hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false);
+                        : hardwareBitmap.copy(Bitmap.Config.ARGB_8888, true);
                 if (hardwareBitmap != null) hardwareBitmap.recycle();
                 buffer.getHardwareBuffer().close();
                 if (bitmap == null) {
@@ -201,8 +223,25 @@ public final class PlatformControlService extends Service {
 
                 final int width = bitmap.getWidth();
                 final int height = bitmap.getHeight();
+                final UiSemanticsSnapshot semantics =
+                        UiSemanticsSnapshot.capture(PlatformControlService.this, width, height);
+                if (width != expectedMetrics.widthPixels
+                        || height != expectedMetrics.heightPixels
+                        || !preCaptureSemantics.available
+                        || !semantics.available) {
+                    bitmap.recycle();
+                    return timed(baseResult(requestId, STATUS_DENIED,
+                            "Private-field protection could not be bound to the exact display."),
+                            started);
+                }
+                // Accessibility and SurfaceFlinger are separate subsystems.
+                // Redact the union of the snapshots immediately before and
+                // after capture so a private field cannot leak during a small
+                // focus/layout race between them.
+                preCaptureSemantics.redactPrivateInputs(bitmap);
+                semantics.redactPrivateInputs(bitmap);
 
-                File capture = File.createTempFile("phone-md-screen-", ".png", getCacheDir());
+                capture = File.createTempFile("phone-md-screen-", ".png", getCacheDir());
                 MessageDigest digest = MessageDigest.getInstance("SHA-256");
                 try (FileOutputStream output = new FileOutputStream(capture);
                      java.security.DigestOutputStream checked =
@@ -213,22 +252,47 @@ public final class PlatformControlService extends Service {
                 } finally {
                     bitmap.recycle();
                 }
+                final String frameSha256 = hex(digest.digest());
+                final String capturedForeground = foregroundPackage();
+                if (capturedForeground == null) {
+                    return timed(baseResult(requestId, STATUS_DENIED,
+                            "The captured foreground app could not be verified."), started);
+                }
+                if (isFinancialPackage(capturedForeground)) {
+                    returnHome();
+                    Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
+                            "Screen capture reached a financial app; returned Home.");
+                    denied.putString("foreground_package", capturedForeground);
+                    return timed(denied, started);
+                }
+                if (!foreground.equals(capturedForeground)) {
+                    Bundle denied = baseResult(requestId, STATUS_DENIED,
+                            "The foreground changed during capture; capture again.");
+                    denied.putString("foreground_before", foreground);
+                    denied.putString("foreground_after", capturedForeground);
+                    return timed(denied, started);
+                }
+                final String visibleFinancialPackage = firstFinancialPackage(semantics);
+                if (visibleFinancialPackage != null) {
+                    returnHome();
+                    Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
+                            "The captured window belongs to a financial app; returned Home.");
+                    denied.putString("foreground_package", capturedForeground);
+                    denied.putString("target_package", visibleFinancialPackage);
+                    return timed(denied, started);
+                }
+
+                final String frameToken = UUID.randomUUID().toString();
+                rememberFrame(frameToken, capturedForeground, frameSha256, semantics);
                 ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(
                         capture, ParcelFileDescriptor.MODE_READ_ONLY);
-                if (!capture.delete()) capture.deleteOnExit();
-
-                final String frameSha256 = hex(digest.digest());
-                final UiSemanticsSnapshot semantics =
-                        UiSemanticsSnapshot.capture(PlatformControlService.this, width, height);
-                final String frameToken = UUID.randomUUID().toString();
-                rememberFrame(frameToken, foreground, frameSha256, semantics);
 
                 Bundle result = baseResult(requestId, STATUS_OK, "Display captured.");
                 result.putParcelable("image_fd", descriptor);
                 result.putInt("width", width);
                 result.putInt("height", height);
                 result.putString("sha256", frameSha256);
-                result.putString("foreground_package", foreground);
+                result.putString("foreground_package", capturedForeground);
                 result.putString("frame_token", frameToken);
                 result.putBoolean("ui_semantics_available", semantics.available);
                 result.putString("ui_semantics", semantics.json);
@@ -240,6 +304,10 @@ public final class PlatformControlService extends Service {
             } finally {
                 if (suppressedOverlayOperation != null) {
                     setOverlayCaptureSuppressed(false, suppressedOverlayOperation);
+                }
+                if (capture != null && capture.exists()
+                        && !capture.delete()) {
+                    capture.deleteOnExit();
                 }
                 Binder.restoreCallingIdentity(identity);
             }
@@ -253,7 +321,9 @@ public final class PlatformControlService extends Service {
                 return timed(baseResult(null, STATUS_INVALID, "Protocol version mismatch."), started);
             }
             final String requestId = request.getString("request_id");
-            final String action = safeLower(request.getString("action"));
+            final String rawAction = request.getString("action");
+            final String action = rawAction != null && rawAction.length() <= 64
+                    ? safeLower(rawAction) : "";
             if (!validRequestId(requestId) || action.isEmpty()) {
                 return timed(baseResult(requestId, STATUS_INVALID, "Invalid action request."), started);
             }
@@ -272,7 +342,7 @@ public final class PlatformControlService extends Service {
                 return timed(denied, started);
             }
             final String frameToken = request.getString("frame_token");
-            if (frameToken == null || frameToken.isBlank()) {
+            if (!validFrameToken(frameToken)) {
                 return timed(baseResult(requestId, STATUS_DENIED,
                         "Input requires the exact captured visual frame."), started);
             }
@@ -281,6 +351,13 @@ public final class PlatformControlService extends Service {
                 return timed(baseResult(requestId, STATUS_DENIED,
                         "The visual frame expired; capture the screen again."), started);
             }
+            final String rawFrameSha256 = request.getString("frame_sha256");
+            final String frameSha256 = rawFrameSha256 != null
+                    && rawFrameSha256.length() == 64 ? safeLower(rawFrameSha256) : "";
+            if (!isSha256(frameSha256) || !frame.sha256.equals(frameSha256)) {
+                return timed(baseResult(requestId, STATUS_DENIED,
+                        "Input did not match the exact captured image digest."), started);
+            }
             if (!before.equals(frame.foregroundPackage)) {
                 Bundle denied = baseResult(requestId, STATUS_DENIED,
                         "The foreground changed after the visual frame; capture again.");
@@ -288,7 +365,49 @@ public final class PlatformControlService extends Service {
                 denied.putString("frame_foreground", frame.foregroundPackage);
                 return timed(denied, started);
             }
-            final String targetPackage = targetPackage(action, request, before, frame);
+            final DisplayMetrics liveMetrics = displayMetrics();
+            final UiSemanticsSnapshot liveSemantics = UiSemanticsSnapshot.capture(
+                    PlatformControlService.this,
+                    liveMetrics.widthPixels,
+                    liveMetrics.heightPixels);
+            final String liveForeground = foregroundPackage();
+            if (!liveSemantics.available || liveForeground == null
+                    || !before.equals(liveForeground)) {
+                Bundle denied = baseResult(requestId, STATUS_DENIED,
+                        "The visible Android target changed after capture; capture again.");
+                denied.putString("foreground_before", before);
+                denied.putString("foreground_after", liveForeground);
+                return timed(denied, started);
+            }
+            final String capturedTargetIdentity = targetIdentity(
+                    action, request, before, frame.semantics);
+            final String liveTargetIdentity = targetIdentity(
+                    action, request, liveForeground, liveSemantics);
+            if (capturedTargetIdentity == null
+                    || !Objects.equals(capturedTargetIdentity, liveTargetIdentity)) {
+                Bundle denied = baseResult(requestId, STATUS_DENIED,
+                        "The visible control changed after capture; capture again.");
+                denied.putString("action", action);
+                denied.putString("foreground_before", before);
+                denied.putBoolean("live_target_checked", true);
+                return timed(denied, started);
+            }
+            if ((frame.semantics.hasFocusedPrivateInput()
+                    || liveSemantics.hasFocusedPrivateInput())
+                    && ("type_text".equals(action)
+                    || ("key_press".equals(action) && isPrivateInputKeyPress(request)))) {
+                Bundle denied = baseResult(requestId, STATUS_DENIED,
+                        "Generated text input is blocked in private fields.");
+                denied.putString("action", action);
+                denied.putString("foreground_before", before);
+                denied.putBoolean("private_input_guard", true);
+                return timed(denied, started);
+            }
+            final String targetPackage = targetPackage(
+                    action,
+                    request,
+                    before,
+                    new FrameContext(before, frame.sha256, liveSemantics, frame.capturedAt));
             if (isFinancialPackage(targetPackage)) {
                 returnHome();
                 Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
@@ -313,7 +432,12 @@ public final class PlatformControlService extends Service {
                 // is a non-touchable visual surface. A privileged gesture monitor
                 // handles real human Stop taps, while tagged generated touches
                 // continue only to the verified app UID.
-                final boolean applied = executeChecked(action, request, targetUid);
+                final boolean applied = executeChecked(
+                        action,
+                        request,
+                        targetUid,
+                        capturedTargetIdentity,
+                        before);
                 if (applied) SystemClock.sleep(160);
                 final String after = foregroundPackage();
                 if (after == null) {
@@ -342,7 +466,9 @@ public final class PlatformControlService extends Service {
                 result.putString("foreground_before", before);
                 result.putString("foreground_after", after);
                 result.putString("target_package", targetPackage);
-                result.putBoolean("frame_token_checked", frame != null);
+                result.putBoolean("frame_token_checked", true);
+                result.putBoolean("frame_sha256_checked", true);
+                result.putBoolean("live_target_checked", true);
                 return timed(result, started);
             } catch (IllegalArgumentException error) {
                 return timed(baseResult(requestId, STATUS_INVALID, error.getMessage()), started);
@@ -467,7 +593,8 @@ public final class PlatformControlService extends Service {
         }
     }
 
-    private boolean executeChecked(String action, Bundle request, int targetUid) {
+    private boolean executeChecked(String action, Bundle request, int targetUid,
+            String capturedTargetIdentity, String capturedForeground) {
         switch (action) {
             case "tap":
                 return tap(coordinate(request, "x", true), coordinate(request, "y", false),
@@ -476,8 +603,22 @@ public final class PlatformControlService extends Service {
                 int x = coordinate(request, "x", true);
                 int y = coordinate(request, "y", false);
                 boolean first = tap(x, y, targetUid);
+                if (!first) return false;
                 SystemClock.sleep(120);
-                return first && tap(x, y, targetUid);
+                DisplayMetrics metrics = displayMetrics();
+                UiSemanticsSnapshot afterFirstTap = UiSemanticsSnapshot.capture(
+                        PlatformControlService.this,
+                        metrics.widthPixels,
+                        metrics.heightPixels);
+                String foreground = foregroundPackage();
+                String liveIdentity = afterFirstTap.available
+                        ? afterFirstTap.identityAt(x, y, capturedForeground, false)
+                        : null;
+                if (!capturedForeground.equals(foreground)
+                        || !Objects.equals(capturedTargetIdentity, liveIdentity)) {
+                    return false;
+                }
+                return tap(x, y, targetUid);
             }
             case "drag":
                 return drag(request.getIntArray("path_x"), request.getIntArray("path_y"),
@@ -490,15 +631,21 @@ public final class PlatformControlService extends Service {
                         metrics.heightPixels - 1);
                 int dx = request.getInt("dx", 0);
                 int dy = request.getInt("dy", 0);
+                int middleX = clampLong((long) x - (long) dx / 2L,
+                        0, metrics.widthPixels - 1);
+                int endX = clampLong((long) x - dx, 0, metrics.widthPixels - 1);
+                int middleY = clampLong((long) y - (long) dy / 2L,
+                        0, metrics.heightPixels - 1);
+                int endY = clampLong((long) y - dy, 0, metrics.heightPixels - 1);
                 return drag(new int[]{
                                 x,
-                                clamp(x - dx / 2, 0, metrics.widthPixels - 1),
-                                clamp(x - dx, 0, metrics.widthPixels - 1),
+                                middleX,
+                                endX,
                             },
                         new int[]{
                                 y,
-                                clamp(y - dy / 2, 0, metrics.heightPixels - 1),
-                                clamp(y - dy, 0, metrics.heightPixels - 1),
+                                middleY,
+                                endY,
                             },
                         targetUid);
             }
@@ -506,9 +653,6 @@ public final class PlatformControlService extends Service {
                 return typeText(request.getString("text", ""), targetUid);
             case "key_press":
                 return keyPress(request.getStringArrayList("keys"), targetUid);
-            case "move":
-            case "screenshot":
-                return true;
             default:
                 throw new IllegalArgumentException("Unsupported action: " + action);
         }
@@ -546,6 +690,65 @@ public final class PlatformControlService extends Service {
                 return frame.semantics.inputPackage(fallback);
             default:
                 return fallback;
+        }
+    }
+
+    private String targetIdentity(
+            String action,
+            Bundle request,
+            String fallback,
+            UiSemanticsSnapshot semantics) {
+        if (semantics == null) return null;
+        switch (action) {
+            case "tap":
+            case "double_tap":
+                return semantics.identityAt(
+                        coordinate(request, "x", true),
+                        coordinate(request, "y", false),
+                        fallback,
+                        false);
+            case "scroll":
+                DisplayMetrics metrics = displayMetrics();
+                return semantics.identityAt(
+                        clamp(request.getInt("x", metrics.widthPixels / 2),
+                                0, metrics.widthPixels - 1),
+                        clamp(request.getInt("y", metrics.heightPixels / 2),
+                                0, metrics.heightPixels - 1),
+                        fallback,
+                        true);
+            case "drag":
+                int[] xs = request.getIntArray("path_x");
+                int[] ys = request.getIntArray("path_y");
+                if (xs == null || ys == null || xs.length == 0 || ys.length == 0) {
+                    return null;
+                }
+                if (xs.length != ys.length || xs.length > MAX_PATH_POINTS) return null;
+                StringBuilder pathIdentity = new StringBuilder("path");
+                for (int index = 0; index < xs.length; index++) {
+                    pathIdentity.append('|').append(xs[index]).append(',').append(ys[index])
+                            .append(':')
+                            .append(semantics.identityAt(
+                                    xs[index], ys[index], fallback, false));
+                }
+                return pathIdentity.toString();
+            case "type_text":
+                return semantics.focusedIdentity(fallback);
+            case "key_press":
+                ArrayList<String> keys = request.getStringArrayList("keys");
+                if (keys != null && keys.size() == 1) {
+                    String key = safeUpper(keys.get(0));
+                    if ("HOME".equals(key)) {
+                        return "global_key|" + fallback + "|" + key;
+                    }
+                    if ("BACK".equals(key) || "ESC".equals(key)
+                            || "ESCAPE".equals(key)) {
+                        return "surface_key|" + semantics.focusedIdentity(fallback)
+                                + "|" + key;
+                    }
+                }
+                return semantics.focusedIdentity(fallback);
+            default:
+                return null;
         }
     }
 
@@ -666,13 +869,16 @@ public final class PlatformControlService extends Service {
         if (text == null || text.length() > MAX_TEXT_LENGTH) {
             throw new IllegalArgumentException("Text input is too long.");
         }
-        if (text.isEmpty()) return true;
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("Text input cannot be empty.");
+        }
         ClipboardManager clipboard = getSystemService(ClipboardManager.class);
         ClipData previous = clipboard.hasPrimaryClip() ? clipboard.getPrimaryClip() : null;
         String previousSource = previous == null ? null : clipboard.getPrimaryClipSource();
+        String inputLabel = "phone.md input " + UUID.randomUUID();
         try {
             String foreground = foregroundPackage();
-            ClipData input = ClipData.newPlainText("phone.md input", text);
+            ClipData input = ClipData.newPlainText(inputLabel, text);
             if (foreground == null) {
                 clipboard.setPrimaryClip(input);
             } else {
@@ -682,12 +888,20 @@ public final class PlatformControlService extends Service {
             return injectKeyCode(KeyEvent.KEYCODE_PASTE, 0, targetUid);
         } finally {
             SystemClock.sleep(80);
-            if (previous == null) {
-                clipboard.clearPrimaryClip();
-            } else if (previousSource == null) {
-                clipboard.setPrimaryClip(previous);
-            } else {
-                clipboard.setPrimaryClipAsPackage(previous, previousSource);
+            ClipData current = clipboard.hasPrimaryClip() ? clipboard.getPrimaryClip() : null;
+            CharSequence currentLabel =
+                    current == null ? null : current.getDescription().getLabel();
+            // Never overwrite a human or target-app clipboard update that
+            // raced this generated paste. Restore only while our opaque clip
+            // is still the exact current value.
+            if (TextUtils.equals(inputLabel, currentLabel)) {
+                if (previous == null) {
+                    clipboard.clearPrimaryClip();
+                } else if (previousSource == null) {
+                    clipboard.setPrimaryClip(previous);
+                } else {
+                    clipboard.setPrimaryClipAsPackage(previous, previousSource);
+                }
             }
         }
     }
@@ -698,9 +912,16 @@ public final class PlatformControlService extends Service {
         }
         int metaState = 0;
         List<Integer> modifiers = new ArrayList<>();
+        Set<String> seenKeys = new HashSet<>();
         Integer main = null;
         for (String raw : keys) {
+            if (raw == null || raw.isBlank() || raw.length() > MAX_KEY_LENGTH) {
+                throw new IllegalArgumentException("A key name is invalid.");
+            }
             String key = safeUpper(raw);
+            if (!seenKeys.add(key)) {
+                throw new IllegalArgumentException("A key chord contains duplicates.");
+            }
             switch (key) {
                 case "CTRL":
                 case "CONTROL":
@@ -744,6 +965,21 @@ public final class PlatformControlService extends Service {
                     targetUid) && applied;
         }
         return applied;
+    }
+
+    private boolean isPrivateInputKeyPress(Bundle request) {
+        ArrayList<String> keys = request.getStringArrayList("keys");
+        if (keys == null || keys.isEmpty()) return true;
+        for (String raw : keys) {
+            String key = safeUpper(raw);
+            if ("BACK".equals(key) || "ESCAPE".equals(key) || "ESC".equals(key)
+                    || "HOME".equals(key) || "UP".equals(key) || "DOWN".equals(key)
+                    || "LEFT".equals(key) || "RIGHT".equals(key)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     private int keyCodeFor(String key) {
@@ -886,6 +1122,7 @@ public final class PlatformControlService extends Service {
         }
         try {
             ApplicationInfo app = getPackageManager().getApplicationInfo(packageName, 0);
+            if (app.category == ApplicationInfo.CATEGORY_FINANCE) return true;
             String label = String.valueOf(getPackageManager().getApplicationLabel(app));
             String normalizedLabel = normalize(label);
             for (String token : FINANCIAL_LABEL_TOKENS) {
@@ -894,6 +1131,14 @@ public final class PlatformControlService extends Service {
         } catch (PackageManager.NameNotFoundException ignored) {
         }
         return false;
+    }
+
+    private String firstFinancialPackage(UiSemanticsSnapshot semantics) {
+        if (semantics == null) return null;
+        for (UiSemanticsSnapshot.Region region : semantics.regions) {
+            if (isFinancialPackage(region.packageName)) return region.packageName;
+        }
+        return null;
     }
 
     private boolean showOverlay(String operationId, String title, String detail, String stopLabel,
@@ -1090,6 +1335,7 @@ public final class PlatformControlService extends Service {
                     if (expectedOperationId != null
                             && !expectedOperationId.equals(mOverlayOperationId)) return;
                     if (mOverlayConfirmation) return;
+                    affectedOperation.set(mOverlayOperationId);
                     WindowManager.LayoutParams params =
                             (WindowManager.LayoutParams) mOverlay.getLayoutParams();
                     if (suppressed) {
@@ -1111,7 +1357,6 @@ public final class PlatformControlService extends Service {
                     } else {
                         windowTraversalFinished.countDown();
                     }
-                    affectedOperation.set(mOverlayOperationId);
                 }
             } catch (Throwable error) {
                 Slog.e(TAG, "Could not change control overlay capture mode", error);
@@ -1127,10 +1372,12 @@ public final class PlatformControlService extends Service {
         try {
             if (!finished.await(2, TimeUnit.SECONDS)) {
                 Slog.e(TAG, "Timed out changing control overlay capture mode");
+                restoreOverlayVisibilityAfterFailure(affectedOperation.get());
                 return null;
             }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
+            restoreOverlayVisibilityAfterFailure(affectedOperation.get());
             return null;
         }
         final String operationId = affectedOperation.get();
@@ -1138,10 +1385,12 @@ public final class PlatformControlService extends Service {
         try {
             if (!windowTraversalFinished.await(1, TimeUnit.SECONDS)) {
                 Slog.e(TAG, "Timed out publishing control overlay capture mode");
+                restoreOverlayVisibilityAfterFailure(operationId);
                 return null;
             }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
+            restoreOverlayVisibilityAfterFailure(operationId);
             return null;
         }
         try {
@@ -1150,9 +1399,33 @@ public final class PlatformControlService extends Service {
             WindowManagerGlobal.getWindowManagerService().syncInputTransactions(false);
         } catch (Throwable error) {
             Slog.e(TAG, "Could not synchronize control overlay capture mode", error);
+            restoreOverlayVisibilityAfterFailure(operationId);
             return null;
         }
         return operationId;
+    }
+
+    private void restoreOverlayVisibilityAfterFailure(String operationId) {
+        if (operationId == null) return;
+        mMainHandler.post(() -> {
+            synchronized (mOverlayLock) {
+                if (mOverlay == null || !operationId.equals(mOverlayOperationId)
+                        || mOverlayConfirmation) {
+                    return;
+                }
+                try {
+                    WindowManager.LayoutParams params =
+                            (WindowManager.LayoutParams) mOverlay.getLayoutParams();
+                    params.alpha = PROGRESS_OVERLAY_WINDOW_ALPHA;
+                    mWindowManager.updateViewLayout(mOverlay, params);
+                    mOverlay.requestLayout();
+                    mOverlaySuppressedForCapture = false;
+                } catch (Throwable error) {
+                    Slog.e(TAG, "Could not restore control overlay visibility", error);
+                    hideOverlayLocked(operationId);
+                }
+            }
+        });
     }
 
     private void awaitNextOverlayLayout(CountDownLatch finished) {
@@ -1234,6 +1507,20 @@ public final class PlatformControlService extends Service {
         return value != null && !value.isBlank() && value.length() <= 128;
     }
 
+    private static boolean validFrameToken(String value) {
+        if (value == null || value.length() != 36) return false;
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isSha256(String value) {
+        return value != null && value.matches("[0-9a-f]{64}");
+    }
+
     private static String bounded(String value, int max, String fallback) {
         if (value == null || value.isBlank()) return fallback;
         return value.length() <= max ? value : value.substring(0, max);
@@ -1249,6 +1536,10 @@ public final class PlatformControlService extends Service {
 
     private static int clamp(int value, int minimum, int maximum) {
         return Math.max(minimum, Math.min(value, maximum));
+    }
+
+    private static int clampLong(long value, int minimum, int maximum) {
+        return (int) Math.max(minimum, Math.min(value, maximum));
     }
 
     private static String normalize(String value) {

@@ -40,6 +40,7 @@ import android.util.Slog;
 import java.io.FileInputStream;
 import java.io.OutputStream;
 import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -69,6 +70,13 @@ final class SystemOperationController {
     private static final long BOOT_START_TOLERANCE_MS = 10_000L;
     private static final long RADIO_TIMEOUT_MS = 30_000L;
     private static final long MAX_APK_BYTES = 2L * 1024 * 1024 * 1024;
+    private static final int MAX_OPERATION_CHARS = 64;
+    private static final int MAX_PACKAGE_CHARS = 255;
+    private static final int MAX_PERMISSION_CHARS = 255;
+    private static final int MAX_VALUE_CHARS = 1_024;
+    private static final int MAX_DETAIL_CHARS = 500;
+    private static final int MAX_MODEMS = 8;
+    private static final int MAX_SUBSCRIPTIONS = 16;
 
     private final Context mContext;
     private final PackageManager mPackages;
@@ -84,7 +92,9 @@ final class SystemOperationController {
             return timed(result(null, null, STATUS_INVALID, "Protocol version mismatch."), started);
         }
         final String requestId = request.getString("request_id");
-        final String operation = lower(request.getString("operation"));
+        final String rawOperation = request.getString("operation");
+        final String operation = rawOperation != null
+                && rawOperation.length() <= MAX_OPERATION_CHARS ? lower(rawOperation) : "";
         if (TextUtils.isEmpty(requestId) || requestId.length() > 128 || operation.isEmpty()) {
             return timed(result(requestId, operation, STATUS_INVALID, "Invalid system operation request."), started);
         }
@@ -140,7 +150,9 @@ final class SystemOperationController {
         SubscriptionManager subscriptions = mContext.getSystemService(SubscriptionManager.class);
         Bundle values = new Bundle();
 
-        int modemCount = Math.max(phones.getActiveModemCount(), phones.getPhoneCount());
+        int modemCount = Math.min(
+                MAX_MODEMS,
+                Math.max(0, Math.max(phones.getActiveModemCount(), phones.getPhoneCount())));
         values.putInt("telephony.active_modem_count", phones.getActiveModemCount());
         values.putInt("telephony.phone_count", phones.getPhoneCount());
         values.putInt("telephony.default_subscription_id",
@@ -167,7 +179,7 @@ final class SystemOperationController {
         List<SubscriptionInfo> active = subscriptions.getActiveSubscriptionInfoList();
         if (active == null) active = new ArrayList<>();
         values.putInt("telephony.active_subscription_count", active.size());
-        for (int index = 0; index < active.size(); index++) {
+        for (int index = 0; index < Math.min(active.size(), MAX_SUBSCRIPTIONS); index++) {
             SubscriptionInfo info = active.get(index);
             int subId = info.getSubscriptionId();
             TelephonyManager phone = phones.createForSubscriptionId(subId);
@@ -254,14 +266,14 @@ final class SystemOperationController {
     private static String readString(StringReader reader) {
         try {
             String value = reader.read();
-            return value == null ? "" : value;
+            return bounded(value, MAX_VALUE_CHARS);
         } catch (Throwable ignored) {
             return "";
         }
     }
 
     private static void putString(Bundle values, String key, String value) {
-        values.putString(key, value == null ? "" : value);
+        values.putString(key, bounded(value, MAX_VALUE_CHARS));
     }
 
     private static String simStateName(int state) {
@@ -321,21 +333,42 @@ final class SystemOperationController {
         ParcelFileDescriptor descriptor = request.getParcelable("apk_fd", ParcelFileDescriptor.class);
         long size = request.getLong("apk_size", -1);
         String expectedHash = lower(request.getString("apk_sha256"));
-        if (descriptor == null || size <= 0 || size > MAX_APK_BYTES || expectedHash.length() != 64) {
+        if (descriptor == null || size <= 0 || size > MAX_APK_BYTES
+                || !expectedHash.matches("[0-9a-f]{64}")) {
+            if (descriptor != null) descriptor.close();
             return result(requestId, operation, STATUS_INVALID, "Install needs a checked APK descriptor, size, and SHA-256.");
         }
         PackageInstaller installer = mPackages.getPackageInstaller();
-        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
-                PackageInstaller.SessionParams.MODE_FULL_INSTALL);
-        params.setSize(size);
-        params.setInstallReason(PackageManager.INSTALL_REASON_USER);
-        int sessionId = installer.createSession(params);
         PackageInstaller.Session session = null;
+        int sessionId = -1;
+        AtomicBoolean submitted = new AtomicBoolean(false);
         try {
+            PackageInfo archive = mPackages.getPackageArchiveInfo(
+                    "/proc/self/fd/" + descriptor.getFd(), 0);
+            String archivePackage = archive == null ? null : checkedPackage(archive.packageName);
+            if (archivePackage == null) {
+                return result(requestId, operation, STATUS_INVALID,
+                        "The checked file is not a readable Android package.");
+            }
+            if (LAUNCHER_PACKAGE.equals(archivePackage) || BROKER_PACKAGE.equals(archivePackage)) {
+                return result(requestId, operation, STATUS_DENIED,
+                        "The phone agent and its broker can only be updated by a checked ROM build.");
+            }
+            if (isInstalled(archivePackage) && !isOrdinaryApp(archivePackage)) {
+                return result(requestId, operation, STATUS_DENIED,
+                        "ROM system apps can only be updated by a checked ROM build.");
+            }
+            PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+                    PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            params.setSize(size);
+            params.setAppPackageName(archivePackage);
+            params.setInstallReason(PackageManager.INSTALL_REASON_USER);
+            sessionId = installer.createSession(params);
             session = installer.openSession(sessionId);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             long copied = 0;
-            try (FileInputStream input = new FileInputStream(descriptor.getFileDescriptor());
+            try (FileInputStream input = new ParcelFileDescriptor.AutoCloseInputStream(
+                         ParcelFileDescriptor.dup(descriptor.getFileDescriptor()));
                  OutputStream output = session.openWrite("base.apk", 0, size)) {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
@@ -350,19 +383,40 @@ final class SystemOperationController {
                 session.fsync(output);
             }
             if (copied != size || !expectedHash.equals(hex(digest.digest()))) {
-                session.abandon();
                 return result(requestId, operation, STATUS_INVALID, "APK size or SHA-256 changed before install.");
             }
-            InstallOutcome outcome = commitSession(session, "install");
+            InstallOutcome outcome = commitSession(session, "install", submitted);
+            boolean installed = outcome.success
+                    && archivePackage.equals(outcome.packageName)
+                    && isInstalled(archivePackage);
             Bundle answer = result(requestId, operation,
-                    outcome.success ? STATUS_OK : STATUS_ERROR,
-                    outcome.success ? "Installed " + outcome.packageName + "." : outcome.message);
-            answer.putString("target", outcome.packageName);
-            answer.putString("after", outcome.success ? "installed" : "not_installed");
+                    installed ? STATUS_OK : STATUS_ERROR,
+                    installed ? "Installed " + archivePackage + "."
+                            : "Android did not verify the installed package.");
+            answer.putString("target", archivePackage);
+            answer.putString("after", installed ? "installed" : "not_installed");
             return answer;
         } finally {
-            descriptor.close();
-            if (session != null) session.close();
+            try {
+                descriptor.close();
+            } finally {
+                try {
+                    if (!submitted.get() && sessionId >= 0) {
+                        try {
+                            if (session != null) {
+                                session.abandon();
+                            } else {
+                                installer.abandonSession(sessionId);
+                            }
+                        } catch (RuntimeException ignored) {
+                            // Cleanup must not replace the checked install
+                            // result or the original copy/verification error.
+                        }
+                    }
+                } finally {
+                    if (session != null) session.close();
+                }
+            }
         }
     }
 
@@ -376,6 +430,10 @@ final class SystemOperationController {
         }
         if (!isInstalled(packageName)) {
             return result(requestId, operation, STATUS_NOT_FOUND, packageName + " is not installed.");
+        }
+        if (!isOrdinaryApp(packageName)) {
+            return result(requestId, operation, STATUS_DENIED,
+                    "ROM system apps cannot be removed through app control.");
         }
         InstallOutcome outcome = commitUninstall(packageName);
         boolean absent = !isInstalled(packageName);
@@ -398,6 +456,11 @@ final class SystemOperationController {
                 || !isOrdinaryApp(GOOGLE_PLAY_STORE_PACKAGE)) {
             return result(requestId, operation, STATUS_DENIED,
                     "The installed Google packages are not both ordinary sandboxed apps.");
+        }
+        if (!isEnabled(GOOGLE_PLAY_SERVICES_PACKAGE)
+                || !isEnabled(GOOGLE_PLAY_STORE_PACKAGE)) {
+            return result(requestId, operation, STATUS_ERROR,
+                    "Google Play services and Google Play Store are not both enabled.");
         }
 
         ActivityManager activity = mContext.getSystemService(ActivityManager.class);
@@ -450,8 +513,13 @@ final class SystemOperationController {
             throws Exception {
         String packageName = checkedPackage(request.getString("package"));
         String permission = request.getString("permission");
-        if (packageName == null || TextUtils.isEmpty(permission) || !isInstalled(packageName)) {
+        if (packageName == null || TextUtils.isEmpty(permission)
+                || permission.length() > MAX_PERMISSION_CHARS || !isInstalled(packageName)) {
             return result(requestId, operation, STATUS_INVALID, "Permission change needs an installed package and exact permission.");
+        }
+        if (LAUNCHER_PACKAGE.equals(packageName) || BROKER_PACKAGE.equals(packageName)) {
+            return result(requestId, operation, STATUS_DENIED,
+                    "The phone agent cannot rewrite its own baked authority.");
         }
         PackageInfo packageInfo = mPackages.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS);
         if (packageInfo.requestedPermissions == null
@@ -537,13 +605,26 @@ final class SystemOperationController {
 
     private Bundle power(String requestId, String operation) {
         PowerManager power = mContext.getSystemService(PowerManager.class);
+        if ("lock".equals(operation)) {
+            boolean before = power.isInteractive();
+            power.goToSleep(SystemClock.uptimeMillis());
+            long deadline = SystemClock.elapsedRealtime() + 5_000;
+            while (power.isInteractive() && SystemClock.elapsedRealtime() < deadline) {
+                SystemClock.sleep(50);
+            }
+            boolean locked = !power.isInteractive();
+            Bundle answer = result(requestId, operation, locked ? STATUS_OK : STATUS_ERROR,
+                    locked ? "Locked the phone." : "Android did not lock the phone.");
+            answer.putString("target", "device");
+            answer.putString("before", before ? "interactive" : "not_interactive");
+            answer.putString("after", locked ? "locked" : "interactive");
+            return answer;
+        }
         Bundle answer = result(requestId, operation, STATUS_OK,
                 operation.substring(0, 1).toUpperCase(Locale.ROOT) + operation.substring(1) + " requested.");
         answer.putString("target", "device");
         answer.putString("after", operation + "_requested");
-        if ("lock".equals(operation)) {
-            power.goToSleep(SystemClock.uptimeMillis());
-        } else if ("reboot".equals(operation)) {
+        if ("reboot".equals(operation)) {
             power.reboot(null);
         } else {
             power.shutdown(false, "phone.md user request", false);
@@ -556,10 +637,12 @@ final class SystemOperationController {
         BluetoothAdapter bluetooth = mContext.getSystemService(BluetoothManager.class).getAdapter();
         NfcAdapter nfc = NfcAdapter.getDefaultAdapter(mContext);
         Bundle values = new Bundle();
+        values.putBoolean("wifi_enabled", wifi.isWifiEnabled());
         values.putBoolean("hotspot_enabled", wifi.isWifiApEnabled());
         values.putBoolean("nfc_available", nfc != null);
         values.putBoolean("nfc_enabled", nfc != null && nfc.isEnabled());
         values.putBoolean("bluetooth_available", bluetooth != null);
+        values.putBoolean("bluetooth_enabled", bluetooth != null && bluetooth.isEnabled());
         Bundle answer = result(requestId, operation, STATUS_OK, "Read platform connectivity state.");
         answer.putString("target", "connectivity");
         answer.putBundle("values", values);
@@ -567,32 +650,80 @@ final class SystemOperationController {
     }
 
     private Bundle wifiConnect(String requestId, String operation, Bundle request) {
-        String ssid = cleanSsid(request.getString("ssid"));
+        String ssid = checkedSsid(request.getString("ssid"));
         String password = request.getString("password");
         if (ssid == null) return result(requestId, operation, STATUS_INVALID, "Wi-Fi connect needs an SSID.");
+        if (!validWpaPassword(password)) {
+            return result(requestId, operation, STATUS_INVALID,
+                    "A WPA password needs 8 through 63 UTF-8 bytes, or 64 hexadecimal characters.");
+        }
         WifiManager wifi = mContext.getSystemService(WifiManager.class);
+        boolean wifiWasEnabled = wifi.isWifiEnabled();
+        if (!wifiWasEnabled) {
+            boolean enabled = wifi.setWifiEnabled(true) && waitForWifiEnabled(wifi, true);
+            if (!enabled) {
+                return result(requestId, operation, STATUS_ERROR,
+                        "Android did not turn on Wi-Fi for the connection.");
+            }
+        }
         WifiConfiguration existing = configuredNetwork(wifi, ssid);
+        WifiInfo priorConnection = wifi.getConnectionInfo();
+        int priorNetworkId = priorConnection == null ? -1 : priorConnection.getNetworkId();
+        WifiConfiguration priorConfiguration =
+                existing == null ? null : new WifiConfiguration(existing);
+        boolean created = false;
+        boolean updated = false;
         int networkId;
         if (existing != null && TextUtils.isEmpty(password)) {
             networkId = existing.networkId;
         } else {
-            WifiConfiguration config = new WifiConfiguration();
+            WifiConfiguration config =
+                    existing == null ? new WifiConfiguration() : new WifiConfiguration(existing);
             config.SSID = quote(ssid);
             if (TextUtils.isEmpty(password)) {
+                config.allowedKeyManagement.clear();
                 config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.NONE);
+                config.preSharedKey = null;
             } else {
-                if (password.length() < 8 || password.length() > 63) {
-                    return result(requestId, operation, STATUS_INVALID, "A WPA password needs 8 through 63 characters.");
-                }
-                config.preSharedKey = quote(password);
+                boolean rawPsk = password.matches("[0-9A-Fa-f]{64}");
+                config.allowedKeyManagement.clear();
+                config.allowedKeyManagement.set(WifiConfiguration.KeyMgmt.WPA_PSK);
+                config.preSharedKey = rawPsk ? password : quote(password);
             }
-            networkId = wifi.addNetwork(config);
+            if (existing == null) {
+                networkId = wifi.addNetwork(config);
+                created = networkId >= 0;
+            } else {
+                config.networkId = existing.networkId;
+                networkId = wifi.updateNetwork(config);
+                updated = networkId >= 0;
+            }
         }
         if (networkId < 0 || !wifi.enableNetwork(networkId, true)) {
+            rollbackWifiChange(
+                    wifi,
+                    networkId,
+                    created,
+                    updated,
+                    priorConfiguration,
+                    priorNetworkId,
+                    wifiWasEnabled);
             return result(requestId, operation, STATUS_ERROR, "Android rejected the Wi-Fi connection.");
         }
         wifi.reconnect();
         boolean connected = waitForWifi(wifi, ssid);
+        if (connected) {
+            wifi.saveConfiguration();
+        } else {
+            rollbackWifiChange(
+                    wifi,
+                    networkId,
+                    created,
+                    updated,
+                    priorConfiguration,
+                    priorNetworkId,
+                    wifiWasEnabled);
+        }
         Bundle answer = result(requestId, operation, connected ? STATUS_OK : STATUS_ERROR,
                 connected ? "Connected to " + ssid + "." : "The phone did not connect to " + ssid + ".");
         answer.putString("target", ssid);
@@ -601,7 +732,7 @@ final class SystemOperationController {
     }
 
     private Bundle wifiForget(String requestId, String operation, Bundle request) {
-        String ssid = cleanSsid(request.getString("ssid"));
+        String ssid = checkedSsid(request.getString("ssid"));
         if (ssid == null) return result(requestId, operation, STATUS_INVALID, "Wi-Fi forget needs an SSID.");
         WifiManager wifi = mContext.getSystemService(WifiManager.class);
         WifiConfiguration config = configuredNetwork(wifi, ssid);
@@ -625,9 +756,14 @@ final class SystemOperationController {
         if (device == null) return result(requestId, operation, STATUS_NOT_FOUND,
                 "Use the exact Bluetooth address returned by scan.");
         int before = device.getBondState();
-        boolean accepted = pair ? device.createBond() : device.removeBond();
         int expected = pair ? BluetoothDevice.BOND_BONDED : BluetoothDevice.BOND_NONE;
-        boolean applied = accepted && waitForBond(device, expected);
+        boolean accepted = before == expected
+                || (pair ? device.createBond() : device.removeBond());
+        boolean applied = accepted && (before == expected || waitForBond(device, expected));
+        if (!applied && pair && before == BluetoothDevice.BOND_NONE) {
+            device.cancelBondProcess();
+            waitForBond(device, BluetoothDevice.BOND_NONE);
+        }
         Bundle answer = result(requestId, operation, applied ? STATUS_OK : STATUS_ERROR,
                 applied ? (pair ? "Paired " : "Unpaired ") + safeDeviceName(device) + "."
                         : "Android did not complete the Bluetooth change.");
@@ -639,22 +775,41 @@ final class SystemOperationController {
 
     private Bundle hotspot(String requestId, String operation, boolean enabled) throws Exception {
         TetheringManager tethering = mContext.getSystemService(TetheringManager.class);
+        WifiManager wifi = mContext.getSystemService(WifiManager.class);
+        boolean before = wifi.isWifiApEnabled();
+        if (before == enabled) {
+            Bundle unchanged = result(requestId, operation, STATUS_OK,
+                    "Wi-Fi hotspot is already " + (enabled ? "on." : "off."));
+            unchanged.putString("target", "wifi_hotspot");
+            unchanged.putString("before", enabled ? "on" : "off");
+            unchanged.putString("after", enabled ? "on" : "off");
+            return unchanged;
+        }
         if (!enabled) {
             tethering.stopTethering(TetheringManager.TETHERING_WIFI);
-            SystemClock.sleep(500);
-            Bundle answer = result(requestId, operation, STATUS_OK, "Wi-Fi hotspot turned off.");
+            boolean stopped = waitForHotspot(wifi, false);
+            Bundle answer = result(requestId, operation,
+                    stopped ? STATUS_OK : STATUS_ERROR,
+                    stopped ? "Wi-Fi hotspot turned off."
+                            : "Android did not turn the Wi-Fi hotspot off.");
             answer.putString("target", "wifi_hotspot");
-            answer.putString("after", "off");
+            answer.putString("before", "on");
+            answer.putString("after", stopped ? "off" : "on");
             return answer;
         }
         CountDownLatch finished = new CountDownLatch(1);
         AtomicInteger errorCode = new AtomicInteger(-1);
         AtomicBoolean started = new AtomicBoolean(false);
+        AtomicBoolean acceptingStart = new AtomicBoolean(true);
         TetheringManager.TetheringRequest tetheringRequest =
                 new TetheringManager.TetheringRequest.Builder(TetheringManager.TETHERING_WIFI).build();
         tethering.startTethering(tetheringRequest, mContext.getMainExecutor(),
                 new TetheringManager.StartTetheringCallback() {
                     @Override public void onTetheringStarted() {
+                        if (!acceptingStart.get()) {
+                            tethering.stopTethering(TetheringManager.TETHERING_WIFI);
+                            return;
+                        }
                         started.set(true);
                         finished.countDown();
                     }
@@ -664,11 +819,19 @@ final class SystemOperationController {
                     }
                 });
         boolean returned = finished.await(30, TimeUnit.SECONDS);
-        Bundle answer = result(requestId, operation, returned && started.get() ? STATUS_OK : STATUS_ERROR,
-                returned && started.get() ? "Wi-Fi hotspot turned on."
+        boolean active = returned && started.get() && waitForHotspot(wifi, true);
+        if (!active) {
+            acceptingStart.set(false);
+            tethering.stopTethering(TetheringManager.TETHERING_WIFI);
+            waitForHotspot(wifi, false);
+        }
+        boolean after = wifi.isWifiApEnabled();
+        Bundle answer = result(requestId, operation, active ? STATUS_OK : STATUS_ERROR,
+                active ? "Wi-Fi hotspot turned on."
                         : "Hotspot start failed with code " + errorCode.get() + ".");
         answer.putString("target", "wifi_hotspot");
-        answer.putString("after", returned && started.get() ? "on" : "off");
+        answer.putString("before", "off");
+        answer.putString("after", after ? "on" : "off");
         return answer;
     }
 
@@ -676,7 +839,7 @@ final class SystemOperationController {
         NfcAdapter adapter = NfcAdapter.getDefaultAdapter(mContext);
         if (adapter == null) return result(requestId, operation, STATUS_NOT_FOUND, "NFC is unavailable.");
         boolean before = adapter.isEnabled();
-        boolean accepted = enabled ? adapter.enable() : adapter.disable();
+        boolean accepted = before == enabled || (enabled ? adapter.enable() : adapter.disable());
         long deadline = SystemClock.elapsedRealtime() + 10_000;
         while (adapter.isEnabled() != enabled && SystemClock.elapsedRealtime() < deadline) {
             SystemClock.sleep(100);
@@ -691,7 +854,8 @@ final class SystemOperationController {
         return answer;
     }
 
-    private InstallOutcome commitSession(PackageInstaller.Session session, String suffix)
+    private InstallOutcome commitSession(PackageInstaller.Session session, String suffix,
+            AtomicBoolean submitted)
             throws Exception {
         String action = BROKER_PACKAGE + ".PACKAGE_RESULT." + suffix + "." + UUID.randomUUID();
         CountDownLatch finished = new CountDownLatch(1);
@@ -714,11 +878,13 @@ final class SystemOperationController {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
         try {
             session.commit(pending.getIntentSender());
+            submitted.set(true);
             if (!finished.await(PACKAGE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 return new InstallOutcome(false, "", "Package installation timed out.");
             }
             return outcome.get();
         } finally {
+            pending.cancel();
             mContext.unregisterReceiver(receiver);
         }
     }
@@ -748,6 +914,7 @@ final class SystemOperationController {
             }
             return outcome.get();
         } finally {
+            pending.cancel();
             mContext.unregisterReceiver(receiver);
         }
     }
@@ -756,6 +923,14 @@ final class SystemOperationController {
         try {
             mPackages.getApplicationInfo(packageName, 0);
             return true;
+        } catch (PackageManager.NameNotFoundException error) {
+            return false;
+        }
+    }
+
+    private boolean isEnabled(String packageName) {
+        try {
+            return mPackages.getApplicationInfo(packageName, 0).enabled;
         } catch (PackageManager.NameNotFoundException error) {
             return false;
         }
@@ -800,7 +975,8 @@ final class SystemOperationController {
     }
 
     private String checkedPackage(String value) {
-        if (value == null || !value.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) return null;
+        if (value == null || value.length() > MAX_PACKAGE_CHARS
+                || !value.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")) return null;
         return value;
     }
 
@@ -808,7 +984,7 @@ final class SystemOperationController {
         List<WifiConfiguration> configured = wifi.getConfiguredNetworks();
         if (configured == null) return null;
         for (WifiConfiguration candidate : configured) {
-            if (ssid.equals(cleanSsid(candidate.SSID))) return candidate;
+            if (ssid.equals(observedSsid(candidate.SSID))) return candidate;
         }
         return null;
     }
@@ -817,15 +993,57 @@ final class SystemOperationController {
         long deadline = SystemClock.elapsedRealtime() + RADIO_TIMEOUT_MS;
         while (SystemClock.elapsedRealtime() < deadline) {
             WifiInfo info = wifi.getConnectionInfo();
-            if (info != null && ssid.equals(cleanSsid(info.getSSID()))
+            if (info != null && ssid.equals(observedSsid(info.getSSID()))
                     && info.getNetworkId() != -1) return true;
             SystemClock.sleep(250);
         }
         return false;
     }
 
+    private void rollbackWifiChange(
+            WifiManager wifi,
+            int changedNetworkId,
+            boolean created,
+            boolean updated,
+            WifiConfiguration priorConfiguration,
+            int priorNetworkId,
+            boolean wifiWasEnabled) {
+        if (created && changedNetworkId >= 0) {
+            wifi.removeNetwork(changedNetworkId);
+        } else if (updated && priorConfiguration != null) {
+            wifi.updateNetwork(priorConfiguration);
+        }
+        wifi.saveConfiguration();
+        if (priorNetworkId >= 0) {
+            wifi.enableNetwork(priorNetworkId, true);
+            wifi.reconnect();
+        }
+        if (!wifiWasEnabled) {
+            wifi.setWifiEnabled(false);
+            waitForWifiEnabled(wifi, false);
+        }
+    }
+
+    private boolean waitForWifiEnabled(WifiManager wifi, boolean enabled) {
+        long deadline = SystemClock.elapsedRealtime() + RADIO_TIMEOUT_MS;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (wifi.isWifiEnabled() == enabled) return true;
+            SystemClock.sleep(250);
+        }
+        return wifi.isWifiEnabled() == enabled;
+    }
+
+    private boolean waitForHotspot(WifiManager wifi, boolean enabled) {
+        long deadline = SystemClock.elapsedRealtime() + RADIO_TIMEOUT_MS;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (wifi.isWifiApEnabled() == enabled) return true;
+            SystemClock.sleep(250);
+        }
+        return wifi.isWifiApEnabled() == enabled;
+    }
+
     private BluetoothDevice findBluetoothDevice(BluetoothAdapter adapter, String query) {
-        if (TextUtils.isEmpty(query)) return null;
+        if (TextUtils.isEmpty(query) || query.length() > 240) return null;
         try {
             if (BluetoothAdapter.checkBluetoothAddress(query)) return adapter.getRemoteDevice(query);
         } catch (IllegalArgumentException ignored) {
@@ -846,13 +1064,29 @@ final class SystemOperationController {
         return false;
     }
 
-    private static String cleanSsid(String value) {
+    private static String checkedSsid(String value) {
         if (value == null) return null;
-        String clean = value.trim();
+        return value.isEmpty()
+                || value.getBytes(StandardCharsets.UTF_8).length > 32
+                || value.chars().anyMatch(codePoint -> Character.isISOControl(codePoint))
+                ? null : value;
+    }
+
+    private static String observedSsid(String value) {
+        if (value == null) return null;
+        String clean = value;
         if (clean.startsWith("\"") && clean.endsWith("\"") && clean.length() >= 2) {
             clean = clean.substring(1, clean.length() - 1);
         }
-        return clean.isEmpty() || clean.length() > 32 ? null : clean;
+        return checkedSsid(clean);
+    }
+
+    private static boolean validWpaPassword(String password) {
+        if (TextUtils.isEmpty(password)) return true;
+        int passwordBytes = password.getBytes(StandardCharsets.UTF_8).length;
+        boolean rawPsk = password.matches("[0-9A-Fa-f]{64}");
+        return !password.chars().anyMatch(codePoint -> Character.isISOControl(codePoint))
+                && (rawPsk || (passwordBytes >= 8 && passwordBytes <= 63));
     }
 
     private static String quote(String value) {
@@ -861,7 +1095,7 @@ final class SystemOperationController {
 
     private static String safeDeviceName(BluetoothDevice device) {
         String name = device.getName();
-        return TextUtils.isEmpty(name) ? device.getAddress() : name;
+        return bounded(TextUtils.isEmpty(name) ? device.getAddress() : name, 240);
     }
 
     private static String bondName(int state) {
@@ -872,10 +1106,10 @@ final class SystemOperationController {
 
     private static Bundle result(String requestId, String operation, String status, String detail) {
         Bundle result = new Bundle();
-        result.putString("request_id", requestId);
-        result.putString("operation", operation);
-        result.putString("status", status);
-        result.putString("detail", detail);
+        result.putString("request_id", bounded(requestId, 128));
+        result.putString("operation", bounded(operation, MAX_OPERATION_CHARS));
+        result.putString("status", bounded(status, 64));
+        result.putString("detail", bounded(detail, MAX_DETAIL_CHARS));
         return result;
     }
 
@@ -890,7 +1124,14 @@ final class SystemOperationController {
 
     private static String safeMessage(Throwable error) {
         String message = error.getMessage();
-        return TextUtils.isEmpty(message) ? error.getClass().getSimpleName() : message;
+        return bounded(
+                TextUtils.isEmpty(message) ? error.getClass().getSimpleName() : message,
+                MAX_DETAIL_CHARS);
+    }
+
+    private static String bounded(String value, int max) {
+        if (value == null) return "";
+        return value.length() <= max ? value : value.substring(0, max);
     }
 
     private static String hex(byte[] bytes) {
