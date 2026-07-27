@@ -88,6 +88,8 @@ public final class PlatformControlService extends Service {
     private static final int GENERATED_MOTION_EDGE_FLAG = 0x40000000;
     private static final long OVERLAY_MAX_LIFETIME_MILLIS = 120_000;
     private static final long FRAME_TOKEN_MAX_AGE_MILLIS = 45_000;
+    private static final long FOREGROUND_NULL_RETRY_MILLIS = 750;
+    private static final long FOREGROUND_NULL_RETRY_INTERVAL_MILLIS = 25;
     private static final int MAX_FRAME_CONTEXTS = 8;
     // A non-touchable overlay above Android's maximum obscuring opacity still
     // makes InputDispatcher reject injected touches beneath it as untrusted.
@@ -161,7 +163,7 @@ public final class PlatformControlService extends Service {
             if (!validRequestId(requestId)) {
                 return timed(baseResult(requestId, STATUS_INVALID, "Invalid request id."), started);
             }
-            final String foreground = foregroundPackage();
+            final String foreground = foregroundPackageAfterTransientNull();
             if (foreground == null) {
                 return timed(baseResult(requestId, STATUS_DENIED,
                         "The foreground app could not be verified."), started);
@@ -256,7 +258,7 @@ public final class PlatformControlService extends Service {
                     bitmap.recycle();
                 }
                 final String frameSha256 = hex(digest.digest());
-                final String capturedForeground = foregroundPackage();
+                final String capturedForeground = foregroundPackageAfterTransientNull();
                 if (capturedForeground == null) {
                     return timed(baseResult(requestId, STATUS_DENIED,
                             "The captured foreground app could not be verified."), started);
@@ -331,7 +333,7 @@ public final class PlatformControlService extends Service {
                 return timed(baseResult(requestId, STATUS_INVALID, "Invalid action request."), started);
             }
 
-            final String before = foregroundPackage();
+            final String before = foregroundPackageAfterTransientNull();
             if (before == null) {
                 return timed(actionResult(requestId, STATUS_DENIED,
                         "The foreground app could not be verified.", action), started);
@@ -373,7 +375,7 @@ public final class PlatformControlService extends Service {
                     PlatformControlService.this,
                     liveMetrics.widthPixels,
                     liveMetrics.heightPixels);
-            final String liveForeground = foregroundPackage();
+            final String liveForeground = foregroundPackageAfterTransientNull();
             if (!liveSemantics.available || liveForeground == null
                     || !before.equals(liveForeground)) {
                 Bundle denied = actionResult(requestId, STATUS_DENIED,
@@ -442,7 +444,7 @@ public final class PlatformControlService extends Service {
                         capturedTargetIdentity,
                         before);
                 if (applied) SystemClock.sleep(160);
-                final String after = foregroundPackage();
+                final String after = foregroundPackageAfterTransientNull();
                 if (after == null) {
                     injectKeyCode(KeyEvent.KEYCODE_HOME, 0);
                     Bundle denied = baseResult(requestId, STATUS_DENIED,
@@ -1116,6 +1118,23 @@ public final class PlatformControlService extends Service {
         } finally {
             Binder.restoreCallingIdentity(identity);
         }
+    }
+
+    /**
+     * UiAutomation and task focus are published by separate system services.
+     * A freshly started activity can briefly report no focused root task after
+     * an accessibility snapshot. Wait only through that null gap. A different
+     * package is returned immediately and remains a hard target mismatch.
+     */
+    private String foregroundPackageAfterTransientNull() {
+        String observed = foregroundPackage();
+        if (observed != null) return observed;
+        long deadline = SystemClock.elapsedRealtime() + FOREGROUND_NULL_RETRY_MILLIS;
+        while (observed == null && SystemClock.elapsedRealtime() < deadline) {
+            SystemClock.sleep(FOREGROUND_NULL_RETRY_INTERVAL_MILLIS);
+            observed = foregroundPackage();
+        }
+        return observed;
     }
 
     private boolean isFinancialPackage(String packageName) {
