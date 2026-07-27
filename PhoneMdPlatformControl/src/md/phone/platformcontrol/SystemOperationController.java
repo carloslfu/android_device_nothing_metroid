@@ -8,6 +8,8 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -37,7 +39,9 @@ import android.telephony.TelephonyManager;
 import android.telephony.euicc.EuiccManager;
 import android.util.Slog;
 
+import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
@@ -77,6 +81,7 @@ final class SystemOperationController {
     private static final int MAX_DETAIL_CHARS = 500;
     private static final int MAX_MODEMS = 8;
     private static final int MAX_SUBSCRIPTIONS = 16;
+    private static final int MAX_CLIPBOARD_TEXT_CHARS = 128 * 1024;
 
     private final Context mContext;
     private final PackageManager mPackages;
@@ -104,6 +109,9 @@ final class SystemOperationController {
             switch (operation) {
                 case "package_install": outcome = install(requestId, operation, request); break;
                 case "package_uninstall": outcome = uninstall(requestId, operation, request); break;
+                case "clipboard_read": outcome = clipboardRead(requestId, operation); break;
+                case "clipboard_write": outcome = clipboardWrite(requestId, operation, request); break;
+                case "clipboard_clear": outcome = clipboardClear(requestId, operation); break;
                 case "google_play_health": outcome = googlePlayHealth(requestId, operation); break;
                 case "google_play_reset": outcome = googlePlayReset(requestId, operation); break;
                 case "grant_runtime_permission": outcome = permission(requestId, operation, request, true); break;
@@ -340,11 +348,36 @@ final class SystemOperationController {
         }
         PackageInstaller installer = mPackages.getPackageInstaller();
         PackageInstaller.Session session = null;
+        File checkedApk = null;
         int sessionId = -1;
         AtomicBoolean submitted = new AtomicBoolean(false);
         try {
+            checkedApk = File.createTempFile(
+                    "phone-md-install-", ".apk", mContext.getCacheDir());
+            MessageDigest receivedDigest = MessageDigest.getInstance("SHA-256");
+            long received = 0;
+            try (FileInputStream input = new ParcelFileDescriptor.AutoCloseInputStream(
+                         ParcelFileDescriptor.dup(descriptor.getFileDescriptor()));
+                 FileOutputStream output = new FileOutputStream(checkedApk)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    received += read;
+                    if (received > size || received > MAX_APK_BYTES) {
+                        throw new IllegalArgumentException("APK exceeded its declared size.");
+                    }
+                    receivedDigest.update(buffer, 0, read);
+                    output.write(buffer, 0, read);
+                }
+                output.getFD().sync();
+            }
+            if (received != size || !expectedHash.equals(hex(receivedDigest.digest()))) {
+                return result(requestId, operation, STATUS_INVALID,
+                        "APK size or SHA-256 changed before validation.");
+            }
+
             PackageInfo archive = mPackages.getPackageArchiveInfo(
-                    "/proc/self/fd/" + descriptor.getFd(), 0);
+                    checkedApk.getAbsolutePath(), 0);
             String archivePackage = archive == null ? null : checkedPackage(archive.packageName);
             if (archivePackage == null) {
                 return result(requestId, operation, STATUS_INVALID,
@@ -367,8 +400,7 @@ final class SystemOperationController {
             session = installer.openSession(sessionId);
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             long copied = 0;
-            try (FileInputStream input = new ParcelFileDescriptor.AutoCloseInputStream(
-                         ParcelFileDescriptor.dup(descriptor.getFileDescriptor()));
+            try (FileInputStream input = new FileInputStream(checkedApk);
                  OutputStream output = session.openWrite("base.apk", 0, size)) {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
@@ -415,9 +447,96 @@ final class SystemOperationController {
                     }
                 } finally {
                     if (session != null) session.close();
+                    if (checkedApk != null && checkedApk.exists()
+                            && !checkedApk.delete()) {
+                        checkedApk.deleteOnExit();
+                    }
                 }
             }
         }
+    }
+
+    private Bundle clipboardRead(String requestId, String operation) {
+        ClipboardManager clipboard = mContext.getSystemService(ClipboardManager.class);
+        ClipData clip = clipboard.getPrimaryClip();
+        ClipData.Item item = clip != null && clip.getItemCount() > 0
+                ? clip.getItemAt(0) : null;
+        String raw = clipboardItemText(item);
+        int totalCharacters = raw.length();
+        boolean truncated = totalCharacters > MAX_CLIPBOARD_TEXT_CHARS;
+        String value = bounded(raw, MAX_CLIPBOARD_TEXT_CHARS);
+
+        Bundle values = new Bundle();
+        values.putString("clipboard_text", value);
+        values.putBoolean("empty", value.isBlank());
+        values.putBoolean("truncated", truncated);
+        values.putInt("total_characters", totalCharacters);
+        Bundle answer = result(requestId, operation, STATUS_OK,
+                value.isBlank() ? "The clipboard is empty."
+                        : truncated
+                                ? "Read the first " + MAX_CLIPBOARD_TEXT_CHARS
+                                        + " characters of the clipboard."
+                                : "Read the clipboard.");
+        answer.putString("target", "clipboard");
+        answer.putBundle("values", values);
+        return answer;
+    }
+
+    private Bundle clipboardWrite(String requestId, String operation, Bundle request) {
+        if (!request.containsKey("clipboard_text")) {
+            return result(requestId, operation, STATUS_INVALID,
+                    "Writing the clipboard needs text.");
+        }
+        String value = request.getString("clipboard_text");
+        if (value == null || value.length() > MAX_CLIPBOARD_TEXT_CHARS) {
+            return result(requestId, operation, STATUS_INVALID,
+                    "Clipboard text exceeds its supported size.");
+        }
+        ClipboardManager clipboard = mContext.getSystemService(ClipboardManager.class);
+        clipboard.setPrimaryClip(ClipData.newPlainText("phone.md", value));
+        ClipData checkedClip = clipboard.getPrimaryClip();
+        String checked = checkedClip != null && checkedClip.getItemCount() == 1
+                && checkedClip.getItemAt(0).getText() != null
+                        ? checkedClip.getItemAt(0).getText().toString() : null;
+        boolean stored = value.equals(checked);
+        Bundle answer = result(requestId, operation, stored ? STATUS_OK : STATUS_ERROR,
+                stored ? "Copied the requested text."
+                        : "Android did not preserve the requested clipboard text exactly.");
+        answer.putString("target", "clipboard");
+        answer.putString("after", stored ? value.length() + " characters" : "not_verified");
+        return answer;
+    }
+
+    private Bundle clipboardClear(String requestId, String operation) {
+        ClipboardManager clipboard = mContext.getSystemService(ClipboardManager.class);
+        clipboard.clearPrimaryClip();
+        boolean cleared = !clipboard.hasPrimaryClip();
+        Bundle answer = result(requestId, operation, cleared ? STATUS_OK : STATUS_ERROR,
+                cleared ? "Cleared the clipboard." : "Android did not clear the clipboard.");
+        answer.putString("target", "clipboard");
+        answer.putString("after", cleared ? "empty" : "not_verified");
+        return answer;
+    }
+
+    private static String clipboardItemText(ClipData.Item item) {
+        if (item == null) return "";
+        if (item.getText() != null) return item.getText().toString();
+        if (item.getUri() != null) return item.getUri().toString();
+        Intent intent = item.getIntent();
+        if (intent == null) return "";
+        StringBuilder value = new StringBuilder();
+        appendClipboardField(value, intent.getAction());
+        appendClipboardField(value, intent.getDataString());
+        appendClipboardField(value, intent.getComponent() == null
+                ? null : intent.getComponent().flattenToShortString());
+        return value.toString();
+    }
+
+    private static void appendClipboardField(StringBuilder target, String value) {
+        if (TextUtils.isEmpty(value) || target.length() >= MAX_CLIPBOARD_TEXT_CHARS) return;
+        if (target.length() > 0) target.append(' ');
+        int remaining = MAX_CLIPBOARD_TEXT_CHARS - target.length();
+        target.append(value, 0, Math.min(value.length(), remaining));
     }
 
     private Bundle uninstall(String requestId, String operation, Bundle request) throws Exception {

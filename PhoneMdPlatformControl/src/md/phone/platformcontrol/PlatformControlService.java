@@ -78,7 +78,7 @@ public final class PlatformControlService extends Service {
     private static final String LAUNCHER_PACKAGE = "md.phone.launcher";
     private static final String LAUNCHER_CERT_SHA256 =
             "261ae1251b95af2d5af84e0c3831d261e8c0f716d18887bb23ffdbfd309215dc";
-    private static final int PROTOCOL_VERSION = 7;
+    private static final int PROTOCOL_VERSION = 8;
     private static final int MAX_TEXT_LENGTH = 20_000;
     private static final int MAX_KEY_LENGTH = 64;
     private static final int MAX_PATH_POINTS = 128;
@@ -148,6 +148,7 @@ public final class PlatformControlService extends Service {
             result.putBoolean("package_management", true);
             result.putBoolean("connectivity_management", true);
             result.putBoolean("power_control", true);
+            result.putBoolean("clipboard_management", true);
             result.putString("foreground_package", foregroundPackage());
             return result;
         }
