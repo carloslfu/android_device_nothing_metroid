@@ -413,6 +413,16 @@ public final class PlatformControlService extends Service {
                     request,
                     before,
                     new FrameContext(before, frame.sha256, liveSemantics, frame.capturedAt));
+            if (LAUNCHER_PACKAGE.equals(targetPackage)
+                    && !LAUNCHER_PACKAGE.equals(before)) {
+                Bundle denied = baseResult(requestId, STATUS_DENIED,
+                        "A phone.md overlay covered the captured app target; capture again.");
+                denied.putString("action", action);
+                denied.putString("foreground_before", before);
+                denied.putString("target_package", targetPackage);
+                denied.putBoolean("live_target_checked", true);
+                return timed(denied, started);
+            }
             if (isFinancialPackage(targetPackage)) {
                 returnHome();
                 Bundle denied = baseResult(requestId, STATUS_FINANCIAL,
