@@ -19,6 +19,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageDataObserver;
+import android.ext.PackageId;
 import android.net.TetheringManager;
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
@@ -606,16 +607,31 @@ final class SystemOperationController {
         ActivityManager activity = mContext.getSystemService(ActivityManager.class);
         int servicesCrashes = currentBootCrashes(activity, GOOGLE_PLAY_SERVICES_PACKAGE);
         int storeCrashes = currentBootCrashes(activity, GOOGLE_PLAY_STORE_PACKAGE);
-        boolean healthy = servicesCrashes == 0 && storeCrashes == 0;
+        int servicesPackageId =
+                mPackages.getApplicationInfo(GOOGLE_PLAY_SERVICES_PACKAGE, 0)
+                        .ext().getPackageId();
+        int storePackageId =
+                mPackages.getApplicationInfo(GOOGLE_PLAY_STORE_PACKAGE, 0)
+                        .ext().getPackageId();
+        boolean compatibilityActive = servicesPackageId == PackageId.GMS_CORE
+                && storePackageId == PackageId.PLAY_STORE;
+        boolean healthy =
+                compatibilityActive && servicesCrashes == 0 && storeCrashes == 0;
         Bundle values = new Bundle();
         values.putBoolean("healthy", healthy);
+        values.putBoolean("compatibility_active", compatibilityActive);
+        values.putInt("play_services_package_id", servicesPackageId);
+        values.putInt("play_store_package_id", storePackageId);
         values.putInt("play_services_crashes_this_boot", servicesCrashes);
         values.putInt("play_store_crashes_this_boot", storeCrashes);
         Bundle answer = result(requestId, operation, STATUS_OK,
-                healthy ? "Google Play has no current-boot crash."
-                        : "A Google Play process crashed during this boot.");
+                healthy ? "Google Play compatibility is active with no current-boot crash."
+                        : !compatibilityActive
+                                ? "Google Play compatibility identity is inactive."
+                                : "A Google Play process crashed during this boot.");
         answer.putString("target", "sandboxed_google_play");
-        answer.putString("after", healthy ? "healthy" : "crashed_this_boot");
+        answer.putString("after", healthy ? "healthy"
+                : compatibilityActive ? "crashed_this_boot" : "compatibility_inactive");
         answer.putBundle("values", values);
         return answer;
     }
