@@ -647,6 +647,18 @@ final class SystemOperationController {
             return result(requestId, operation, STATUS_DENIED,
                     "The installed Google packages are not both ordinary sandboxed apps.");
         }
+        int servicesPackageId =
+                mPackages.getApplicationInfo(GOOGLE_PLAY_SERVICES_PACKAGE, 0)
+                        .ext().getPackageId();
+        int storePackageId =
+                mPackages.getApplicationInfo(GOOGLE_PLAY_STORE_PACKAGE, 0)
+                        .ext().getPackageId();
+        if (servicesPackageId != PackageId.GMS_CORE
+                || storePackageId != PackageId.PLAY_STORE) {
+            return result(requestId, operation, STATUS_DENIED,
+                    "Google Play compatibility identity is inactive. Install an OS update; "
+                            + "clearing app data cannot repair this.");
+        }
 
         ClearDataOutcome store = clearUserData(GOOGLE_PLAY_STORE_PACKAGE);
         ClearDataOutcome services = clearUserData(GOOGLE_PLAY_SERVICES_PACKAGE);
