@@ -5,4 +5,14 @@
 
     <!-- Native notification and media-session tools are part of the OS agent. -->
     <string name="config_defaultListenerAccessPackages" translatable="false">md.phone.launcher</string>
+
+    <!-- Do-not-disturb is the agent's to set. Android keeps this behind a
+         special access that is separate from the ACCESS_NOTIFICATION_POLICY
+         manifest permission, and the stock default here names
+         com.android.camera2, which this ROM does not even ship. The result was
+         that no package held the access, so every do-not-disturb write returned
+         denied on the device and "no noise except when someone calls" could not
+         be honoured at all. Granting it here is what makes that sentence hold
+         across a reflash; a hand grant does not survive one. -->
+    <string name="config_defaultDndAccessPackages" translatable="false">md.phone.launcher</string>
 </resources>
