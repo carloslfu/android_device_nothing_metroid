@@ -47,8 +47,12 @@ TARGET_BOARD_PLATFORM_GPU := Adreno-825
 # Display
 TW_THEME := portrait_hdpi
 TARGET_SCREEN_DENSITY := 460
-TARGET_SCREEN_HEIGHT := 1260
-TARGET_SCREEN_WIDTH := 2800
+TARGET_SCREEN_HEIGHT := 2800
+TARGET_SCREEN_WIDTH := 1260
+# phone.md boot animation, rendered by scripts/gen-phone-md-bootanimation.py in
+# the phone.md repo from OS-DESIGN.md § Boot experience. Lineage's genrule
+# copies this file verbatim instead of scaling its own logo strip.
+TARGET_BOOTANIMATION := device/nothing/metroid/bootanimation/bootanimation.zip
 TW_MAX_BRIGHTNESS := 4500
 TW_DEFAULT_BRIGHTNESS := 2000
 TARGET_USES_VULKAN := true
