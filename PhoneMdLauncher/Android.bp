@@ -26,5 +26,9 @@ android_app_import {
         "Dialer",
         "LineageSetupWizard",
         "Provision",
+        // Lineage's OTA client polls LineageOS servers this ROM will never
+        // publish to, and it is the loudest Lineage-branded app surface.
+        // phone.md images ship through the guarded flash path instead.
+        "Updater",
     ],
 }

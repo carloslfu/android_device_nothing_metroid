@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one visible LineageOS mention in the OS: the About phone row that
+     says what phone.md is derived from, honoring the Apache-2.0 heritage.
+     Every other surface is phone.md. -->
+<resources>
+    <string name="lineage_version">Based on LineageOS</string>
+</resources>
