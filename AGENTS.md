@@ -14,6 +14,12 @@ from physical output. Both SDK and physical Soong/Kati configuration checks
 pass on September 7. Image compilation, API-36/native/host-mic and physical
 acceptance stay separate and pending until recorded in phone.md.
 
+The first API-36 emulator image compiled but failed its September 7 boot:
+DisplayPolicy queried LineageSettings without its core provider installed.
+The SDK target must include LineageSettingsProvider as well as the SDK library;
+the provider module brings its own system_ext privileged-permission whitelist.
+A successful build graph does not prove runtime package closure or boot.
+
 **STATUS: THE DEVICE BOOTS.** LineageOS 23 reaches `sys.boot_completed=1`, the
 real launcher (QuickstepLauncher), with **touch working**. This is a hard-won
 known-good state. Git tag: **`known-good-boot-20260708`** (this repo).

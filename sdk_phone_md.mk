@@ -13,6 +13,10 @@ include vendor/lineage/config/BoardConfigSoong.mk
 
 # The Lineage framework needs its paired SDK jar, resources and permissions.
 include vendor/lineage/config/lineage_sdk_common.mk
+# DisplayPolicy reads LineageSettings during system_server startup. The SDK
+# library alone does not install this core provider; omitting it crash-loops
+# before PackageManager/WindowManager become available on a fresh emulator.
+PRODUCT_PACKAGES += LineageSettingsProvider
 
 PRODUCT_NAME := sdk_phone_md
 PRODUCT_DEVICE := emu64a
