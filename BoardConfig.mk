@@ -1,5 +1,9 @@
 DEVICE_PATH := device/nothing/metroid
 
+# Keep Nothing's stock wireless contracts local to this physical board.
+$(call soong_config_set,phone_md,metroid_wifi_prebuilt,true)
+$(call soong_config_set,phone_md,metroid_stock_bluetooth_audio,true)
+
 # Android 16 generates vendor/etc/linker.config.pb from this build's vendor
 # graph. Remove Nothing's extracted stock copy after product inheritance has
 # been resolved but before board_config.mk expands the destination placeholder.

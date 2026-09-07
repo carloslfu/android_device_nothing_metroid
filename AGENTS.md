@@ -1,5 +1,19 @@
 # AGENTS.md — READ THIS FIRST (metroid / Nothing Phone 3 / LineageOS 23)
 
+**Current phone.md authority (September 7, 2026):** the tracked
+`phone.md/AGENT-NATIVE-UX-PLAN.md` and `phone.md/build/metroid/README.md` own
+current source, accepted ROM and release gates. The bring-up notes below are
+historical constraints, not a current device-capability or acceptance report.
+Use only the canonical guarded flash workflow when a physical run is authorized.
+
+The additive `sdk_phone_md-bp2a-userdebug` target inherits Goldfish's `emu64a`
+board and shares the phone.md launcher, locale controller, platform controller,
+permission files and overlays from this tree. It never inherits metroid's
+vendor/HAL/firmware product. Build it into `out-phone-md-emulator-api36`, separate
+from physical output. Both SDK and physical Soong/Kati configuration checks
+pass on September 7. Image compilation, API-36/native/host-mic and physical
+acceptance stay separate and pending until recorded in phone.md.
+
 **STATUS: THE DEVICE BOOTS.** LineageOS 23 reaches `sys.boot_completed=1`, the
 real launcher (QuickstepLauncher), with **touch working**. This is a hard-won
 known-good state. Git tag: **`known-good-boot-20260708`** (this repo).
@@ -43,7 +57,7 @@ known-good state. Git tag: **`known-good-boot-20260708`** (this repo).
    early-adb at boot, before handing over to the dynamic USB gadget HAL
    (triggered by `sys.usb.configfs=2` in late boot).
 
-4. **Do NOT revert the two `frameworks/base` patches** (in `patches/frameworks_base/`).
+4. **Do NOT revert the two owned `frameworks/base` fixes** pinned by phone.md's manifest.
    They are required to reach boot_completed:
    - SoundTrigger `ExternalCaptureStateTracker` LOG_ALWAYS_FATAL → non-fatal.
    - `UsbGadgetAidl.isServicePresent` isDeclared → checkService (non-blocking).
