@@ -19,6 +19,10 @@ DisplayPolicy queried LineageSettings without its core provider installed.
 The SDK target must include LineageSettingsProvider as well as the SDK library;
 the provider module brings its own system_ext privileged-permission whitelist.
 A successful build graph does not prove runtime package closure or boot.
+The second image reached Android boot-complete but SystemUI crash-looped:
+the SDK product lacked LINEAGE_BUILD, so the core build omitted the standard
+Lineage SELinux service contexts. Keep LINEAGE_BUILD non-empty for this product
+and retain enforcing policy; a boot property alone is not runtime acceptance.
 
 **STATUS: THE DEVICE BOOTS.** LineageOS 23 reaches `sys.boot_completed=1`, the
 real launcher (QuickstepLauncher), with **touch working**. This is a hard-won

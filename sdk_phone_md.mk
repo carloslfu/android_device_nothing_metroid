@@ -20,6 +20,11 @@ PRODUCT_PACKAGES += LineageSettingsProvider
 
 PRODUCT_NAME := sdk_phone_md
 PRODUCT_DEVICE := emu64a
+# build/make/core/config.mk includes the standard Lineage service policy only
+# for a non-empty LINEAGE_BUILD, after board configuration has finished. The
+# SDK uses the Lineage framework too: without these labels, system_server
+# cannot publish lineageglobalactions and SystemUI repeatedly crashes.
+LINEAGE_BUILD := phone_md_emulator
 PRODUCT_BRAND := phone.md
 PRODUCT_MODEL := phone.md
 PRODUCT_MANUFACTURER := phone.md
