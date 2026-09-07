@@ -17,6 +17,10 @@ include vendor/lineage/config/lineage_sdk_common.mk
 # library alone does not install this core provider; omitting it crash-loops
 # before PackageManager/WindowManager become available on a fresh emulator.
 PRODUCT_PACKAGES += LineageSettingsProvider
+# handheld_product omits its keyboard when LINEAGE_BUILD is set, expecting
+# common_mobile to add it. The SDK does not inherit that physical-phone config.
+# Keep the real source-built keyboard available for typed input and recovery.
+PRODUCT_PACKAGES += LatinIME
 
 PRODUCT_NAME := sdk_phone_md
 PRODUCT_DEVICE := emu64a

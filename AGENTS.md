@@ -23,6 +23,9 @@ The second image reached Android boot-complete but SystemUI crash-looped:
 the SDK product lacked LINEAGE_BUILD, so the core build omitted the standard
 Lineage SELinux service contexts. Keep LINEAGE_BUILD non-empty for this product
 and retain enforcing policy; a boot property alone is not runtime acceptance.
+Setting LINEAGE_BUILD also makes handheld_product omit LatinIME. The SDK must
+add LatinIME explicitly because it does not inherit common_mobile. Verify an
+enabled default IME and a real software-keyboard interaction after fresh boot.
 
 **STATUS: THE DEVICE BOOTS.** LineageOS 23 reaches `sys.boot_completed=1`, the
 real launcher (QuickstepLauncher), with **touch working**. This is a hard-won
